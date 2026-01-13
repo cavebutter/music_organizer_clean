@@ -1,0 +1,8 @@
+/venv
+config.ini
+/output/*
+!/output/.gitignore
+/logs/*
+/.pytest_cache
+.idea
+__pycache__
