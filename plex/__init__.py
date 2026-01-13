@@ -1,26 +1,31 @@
-import configparser
 import os
+from dotenv import load_dotenv
 
-# Initialize the config parser
-config = configparser.ConfigParser()
+load_dotenv()
 
-# Read the config file
-config.read('config.ini')
+# Production Plex server
+PLEX_SERVER_NAME = os.getenv("PLEX_SERVER_NAME", "")
+PLEX_SERVER_URL = os.getenv("PLEX_SERVER_URL", "")
+PLEX_SERVER_TOKEN = os.getenv("PLEX_SERVER_TOKEN", "")
+PLEX_MUSIC_LIBRARY = os.getenv("PLEX_MUSIC_LIBRARY", "Music")
+PLEX_USER = os.getenv("PLEX_USER", "")
+PLEX_PASSWORD = os.getenv("PLEX_PASSWORD", "")
 
-# Extract the required configuration items
-WOODSTOCK_servername = config['WOODSTOCK']['servername']
-musiclibrary = config['WOODSTOCK']['musiclibrary']
-plex_username = config['WOODSTOCK']['username']
-plex_password = config['WOODSTOCK']['password']
-TEST_SERVER = config['TEST_LIB']['servername']
-TEST_LIBRARY = config['TEST_LIB']['musiclibrary']
+# Test Plex server
+PLEX_TEST_SERVER_NAME = os.getenv("PLEX_TEST_SERVER_NAME", "")
+PLEX_TEST_SERVER_URL = os.getenv("PLEX_TEST_SERVER_URL", "")
+PLEX_TEST_SERVER_TOKEN = os.getenv("PLEX_TEST_SERVER_TOKEN", "")
+PLEX_TEST_LIBRARY = os.getenv("PLEX_TEST_LIBRARY", "test_music")
 
-# Make them available to all modules in the plex package
 __all__ = [
-    'WOODSTOCK_servername',
-    'musiclibrary',
-    'plex_username',
-    'plex_password',
-    'TEST_SERVER',
-    'TEST_LIBRARY',
+    'PLEX_SERVER_NAME',
+    'PLEX_SERVER_URL',
+    'PLEX_SERVER_TOKEN',
+    'PLEX_MUSIC_LIBRARY',
+    'PLEX_USER',
+    'PLEX_PASSWORD',
+    'PLEX_TEST_SERVER_NAME',
+    'PLEX_TEST_SERVER_URL',
+    'PLEX_TEST_SERVER_TOKEN',
+    'PLEX_TEST_LIBRARY',
 ]

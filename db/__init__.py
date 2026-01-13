@@ -1,15 +1,14 @@
-import configparser
+import os
+from dotenv import load_dotenv
 
-config = configparser.ConfigParser()
+load_dotenv()
 
-config.read('config.ini')
-
-DB_PATH = config['MYSQL']['db_path']
-DB_USER = config['MYSQL']['db_user']
-DB_PASSWORD = config['MYSQL']['db_pwd']
-DB_DATABASE = config['MYSQL']['db_database']
-TEST_DB = config['MYSQL_TEST']['db_database']
-DB_PORT = config['MYSQL']['db_port']
+DB_PATH = os.getenv("MYSQL_HOST", "localhost")
+DB_USER = os.getenv("MYSQL_USER", "root")
+DB_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+DB_DATABASE = os.getenv("MYSQL_DATABASE", "music_organizer")
+TEST_DB = os.getenv("MYSQL_TEST_DATABASE", "sandbox")
+DB_PORT = os.getenv("MYSQL_PORT", "3306")
 
 __all__ = [
     'DB_PATH',

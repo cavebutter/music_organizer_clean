@@ -1,31 +1,35 @@
-from . import WOODSTOCK_servername, musiclibrary, plex_password, plex_username, TEST_SERVER, TEST_LIBRARY
+from . import (
+    PLEX_SERVER_NAME,
+    PLEX_MUSIC_LIBRARY,
+    PLEX_USER,
+    PLEX_PASSWORD,
+    PLEX_TEST_SERVER_NAME,
+    PLEX_TEST_LIBRARY,
+)
 from plexapi.myplex import MyPlexAccount
 from datetime import datetime
 import sys
 import csv
 from loguru import logger
 
-plex_username = plex_username
-plex_password = plex_password
-PLEX_SERVER = WOODSTOCK_servername
-MUSIC_LIBRARY = musiclibrary
-TEST_SERVER = TEST_SERVER
-TEST_LIBRARY = TEST_LIBRARY
-
-def plex_connect():
+def plex_connect(test: bool = True):
     """
-    Connects to a Plex server using the credentials and server name from the configuration.
+    Connects to a Plex server using the credentials from environment.
+
+    Args:
+        test: If True, connect to test server. If False, connect to production.
 
     Returns:
-    PlexServer: The connected Plex server object.
+        PlexServer: The connected Plex server object.
     """
-    account = MyPlexAccount(plex_username, plex_password)
+    server_name = PLEX_TEST_SERVER_NAME if test else PLEX_SERVER_NAME
+    account = MyPlexAccount(PLEX_USER, PLEX_PASSWORD)
     try:
-        server = account.resource(TEST_SERVER).connect()
-        logger.info(f"Connected to Plex Server: {TEST_SERVER}")
+        server = account.resource(server_name).connect()
+        logger.info(f"Connected to Plex Server: {server_name}")
         return server
     except Exception as e:
-        logger.error(f"Error connecting to Plex server {TEST_SERVER}: {e}")
+        logger.error(f"Error connecting to Plex server {server_name}: {e}")
         sys.exit()
 
 def get_music_library(server, library):
