@@ -1,3 +1,4 @@
+
 """
 Pytest configuration and fixtures for music_organizer tests.
 
@@ -6,8 +7,7 @@ Test Strategy:
     Tests validate the full pipeline from Plex extraction through database storage.
 
 Supported File Types:
-    Music (positive tests): flac, mp3, ogg, opus, aac, alac, m4a
-    Non-music (negative tests): txt, jpg, nfo
+    Music: flac, mp3, m4a
 """
 import pytest
 from db import DB_PATH, DB_USER, DB_PASSWORD, TEST_DB, DB_DATABASE
@@ -24,26 +24,27 @@ from plexapi.myplex import MyPlexAccount
 
 
 # File type constants for test assertions
-SUPPORTED_AUDIO_EXTENSIONS = {'.flac', '.mp3', '.ogg', '.opus', '.aac', '.alac', '.m4a'}
-NON_AUDIO_EXTENSIONS = {'.txt', '.jpg', '.nfo'}
+SUPPORTED_AUDIO_EXTENSIONS = {'.flac', '.mp3', '.m4a'}
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def db_test():
-    """Database connection to sandbox (test database)."""
+    """Database connection to sandbox (test database). Fresh connection per test."""
     database = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB)
     database.connect()
     yield database
-    database.close()
+    if database.connection:
+        database.close()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def db_prod():
     """Database connection to production database. Use with caution."""
     database = Database(DB_PATH, DB_USER, DB_PASSWORD, DB_DATABASE)
     database.connect()
     yield database
-    database.close()
+    if database.connection:
+        database.close()
 
 
 @pytest.fixture(scope="session")

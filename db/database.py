@@ -156,6 +156,7 @@ class Database:
         list
             the results of the query
         """
+        result = []
         try:
             cursor = self.connection.cursor()
             logger.debug("Connected to MySQL server")
@@ -167,9 +168,7 @@ class Database:
         except mysql.connector.Error as error:
             logger.error(f"There was an error executing the query: {error}")
             self.connection.rollback()
-            result = []
-        finally:
-            return result
+        return result
 
 
     def create_all_tables(self):

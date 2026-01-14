@@ -1,8 +1,5 @@
-from os import WCONTINUED
-
 from . import DB_PATH, DB_USER, DB_PASSWORD, DB_DATABASE, DB_PORT, TEST_DB
 from .database import Database
-from analysis import bpm
 import analysis.acousticbrainz as acousticbrainz
 from loguru import logger
 import csv

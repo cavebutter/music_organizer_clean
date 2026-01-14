@@ -1,23 +1,60 @@
-from database import Database
-from configparser import ConfigParser
+"""
+Reset the sandbox (test) database by truncating all tables.
 
-config = ConfigParser()
-config.read('../config.ini')
+Preserves table schema but removes all data for a fresh test run.
+"""
+from db import DB_PATH, DB_USER, DB_PASSWORD, TEST_DB
+from db.database import Database
+from loguru import logger
 
-#LASTFM_API_KEY = config['LASTFM']['api_key']
-DATABASE_HOST = config['MYSQL']['db_path']
-DATABASE_USER = config['MYSQL']['db_user']
-DATABASE_PASSWORD = config['MYSQL']['db_pwd']
-DATABASE_DB = config['MYSQL']['db_database']
+
+# Tables to truncate, in order (respects foreign key constraints)
+TABLES_TO_TRUNCATE = [
+    "track_genres",
+    "artist_genres",
+    "similar_artists",
+    "track_data",
+    "artists",
+    "genres",
+    "history",
+]
+
+
+def truncate_all_tables(database: Database) -> int:
+    """
+    Truncate all tables in the test database.
+
+    Args:
+        database: Connected Database instance
+
+    Returns:
+        Number of tables truncated
+    """
+    database.connect()
+
+    # Disable foreign key checks for truncation
+    database.execute_query("SET FOREIGN_KEY_CHECKS = 0")
+
+    truncated = 0
+    for table in TABLES_TO_TRUNCATE:
+        try:
+            database.execute_query(f"TRUNCATE TABLE {table}")
+            logger.info(f"Truncated table: {table}")
+            truncated += 1
+        except Exception as e:
+            logger.warning(f"Could not truncate {table}: {e}")
+
+    # Re-enable foreign key checks
+    database.execute_query("SET FOREIGN_KEY_CHECKS = 1")
+
+    database.close()
+    return truncated
+
 
 if __name__ == '__main__':
-    cxn = Database(DATABASE_HOST, DATABASE_USER, DATABASE_PASSWORD, "sandbox")
-    cxn.connect()
-    cxn.drop_table("tags")
-    cxn.drop_table("genres")
-    cxn.drop_table("history")
-    cxn.drop_table("track_data")
-    cxn.drop_table("similar_artists")
-    cxn.drop_table("artists")
-    cxn.drop_table("track_genres")
-    cxn.close()
+    print(f"Resetting sandbox database: {TEST_DB}")
+
+    db = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB)
+    count = truncate_all_tables(db)
+
+    print(f"Truncated {count} tables")

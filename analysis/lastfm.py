@@ -1,20 +1,19 @@
-from configparser import ConfigParser
+import os
 import requests
 import json
 from loguru import logger
+from dotenv import load_dotenv
 from db.database import Database
 from db import DB_PATH, DB_USER, DB_PASSWORD, DB_DATABASE, TEST_DB
 
-config = ConfigParser()
-config.read('config.ini')
+load_dotenv()
 
-LASTFM_API_KEY = config['LASTFM']['api_key']
-LASTFM_SHARED_SECRET = config['LASTFM']['shared_secret']
-LASTFM_USERNAME = config['LASTFM']['username']
-LASTFM_PASSWORD = config['LASTFM']['password']
-LASTFM_APP_NAME = config['LASTFM']['app_name']
+LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "")
+LASTFM_SHARED_SECRET = os.getenv("LASTFM_SHARED_SECRET", "")
+LASTFM_USERNAME = os.getenv("LASTFM_USERNAME", "")
+LASTFM_APP_NAME = os.getenv("LASTFM_APP_NAME", "")
 
-database = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB) # Change to production db
+database = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB)  # Change to production db
 def get_artist_info(artist_name):
 
     """
