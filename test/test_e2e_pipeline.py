@@ -290,6 +290,36 @@ class TestDatabaseLoad:
         assert album is not None and album != ""
         assert plex_id is not None and plex_id > 0
 
+    def test_compilation_tracks_have_correct_artist(self, populated_sandbox):
+        """Compilation album tracks should have track artist, not 'Various Artists'."""
+        db = populated_sandbox
+        db.connect()
+        result = db.execute_select_query("""
+            SELECT title, artist, album
+            FROM track_data
+            WHERE album LIKE '%No Thanks%Punk Rebellion%'
+        """)
+        db.close()
+
+        if len(result) == 0:
+            pytest.skip("Compilation album 'No Thanks! The '70s Punk Rebellion' not in test library")
+
+        # None of the tracks should have "Various Artists" as the artist
+        various_artists_tracks = [
+            (title, artist) for title, artist, album in result
+            if artist.lower() == "various artists"
+        ]
+
+        assert len(various_artists_tracks) == 0, (
+            f"Found {len(various_artists_tracks)} tracks with 'Various Artists' instead of track artist: "
+            f"{various_artists_tracks[:5]}"
+        )
+
+        # Log some sample artists for verification
+        print(f"\nCompilation album tracks ({len(result)} total):")
+        for title, artist, album in result[:5]:
+            print(f"  - '{title}' by {artist}")
+
 
 @pytest.fixture(scope="module")
 def enriched_sandbox(populated_sandbox):

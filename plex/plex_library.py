@@ -80,13 +80,16 @@ def get_all_tracks_limit(music_library, limit=50):
 
 
 def extract_track_data(track, filepath_prefix: str):
-   #  TODO: This does not handle Various Artist albums well. Need to fix this.
     """
     Extract Plex track data from a track object. Return a dict with selected data
     along with a server_id for ratingKey and a stripped filepath.
-    :param track: Plex track object
-    :param filepath_prefix: string to be stripped from the location[0] field
-    :return:
+
+    Args:
+        track: Plex track object
+        filepath_prefix: string to be stripped from the location[0] field
+
+    Returns:
+        dict with track metadata
     """
     genre_list = []
     for genre in track.genres:
@@ -100,9 +103,14 @@ def extract_track_data(track, filepath_prefix: str):
     logger.debug(f"Filepath prefix: {filepath_prefix}")
     stripped_location = track.locations[0].replace(filepath_prefix, '')
     logger.debug(f"Stripped location: {stripped_location}")
+
+    # Use originalTitle for compilation tracks (contains actual track artist),
+    # fall back to album artist for regular albums
+    artist = track.originalTitle if track.originalTitle else track.artist().title
+
     track_data = {
         'title': track.title,
-        'artist': track.artist().title,
+        'artist': artist,
         'album': track.album().title,
         'genre': genre_list,
         'added_date': added_date,
