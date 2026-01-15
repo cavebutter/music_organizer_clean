@@ -5,6 +5,8 @@ from loguru import logger
 import json
 from dotenv import load_dotenv
 
+from db.database import Database
+
 load_dotenv()
 
 # Path mapping configuration from environment
@@ -169,70 +171,173 @@ def verify_path_accessible(filepath: str) -> bool:
         return False
     return os.path.isfile(filepath) and os.access(filepath, os.R_OK)
 
-def ffmpeg_get_info(track) -> json:
+
+def _get_tag_safe(track_info: dict, tag_names: list[str]) -> Optional[str]:
     """
+    Safely extract a tag from ffprobe output, trying multiple name variants.
+
+    Different tagging tools and formats use different tag names:
+    - MusicBrainz Picard: 'MusicBrainz Track Id', 'MusicBrainz Artist Id'
+    - Some formats: 'MUSICBRAINZ_TRACKID', 'MUSICBRAINZ_ARTISTID'
+    - Others: 'musicbrainz_trackid', 'musicbrainz_artistid'
 
     Args:
-        track: Audio file path
+        track_info: Dict from ffprobe JSON output
+        tag_names: List of tag name variants to try (case-insensitive)
 
-    Returns: json with ffmpeg info
-
+    Returns:
+        Tag value if found, None otherwise
     """
-    logger.debug(f"Getting ffmpeg info for {track}")
-    cmd = ["ffprobe",
-               "-v", "error",
-               "-print_format", "json",
-                "-show_format",
-                "-show_streams",
-                track]
-    result = s.run(cmd, stdout=s.PIPE, stderr=s.PIPE, text=True)
-
-    if result.returncode != 0:
-        logger.error(f"Error getting ffmpeg info for {track}: {result.stderr}")
+    if not track_info:
         return None
-    return json.loads(result.stdout)
 
+    try:
+        tags = track_info.get("format", {}).get("tags", {})
+        if not tags:
+            return None
 
-def ffmpeg_get_mbtid(track_info: json) -> str:
-    """
-    Get MusicBrainz Track ID from ffmpeg info
-    Args:
-        track_info: json with ffmpeg info
+        # Build case-insensitive lookup
+        tags_lower = {k.lower(): v for k, v in tags.items()}
 
-    Returns: mbtb
+        for name in tag_names:
+            value = tags_lower.get(name.lower())
+            if value:
+                return value.strip()
 
-    """
-    mbtid = track_info["format"]["tags"]['MusicBrainz Track Id']
-    if not mbtid:
-        logger.error(f"Error getting mbtid from ffmpeg info: {track_info}")
         return None
-    else:
-        logger.info(f"Got mbtid {mbtid} from ffmpeg info for {track_info['format']['filename']}")
-        return mbtid
+    except Exception as e:
+        logger.debug(f"Error extracting tag {tag_names}: {e}")
+        return None
 
 
-def ffmpeg_get_track_artist_and_artist_mbid(track_info: json) -> tuple:
+# Tag name variants for MusicBrainz IDs
+# Different taggers and formats use different names for the same data
+TRACK_MBID_TAGS = [
+    'MusicBrainz Track Id',
+    'MUSICBRAINZ_TRACKID',
+    'musicbrainz_trackid',
+    'MusicBrainz Recording Id',
+    'MUSICBRAINZ_RECORDINGID',
+    'musicbrainz_recordingid',
+    'MusicBrainz Release Track Id',  # Picard uses this
+    'MUSICBRAINZ_RELEASETRACKID',
+    'musicbrainz_releasetrackid',
+]
+
+ARTIST_MBID_TAGS = [
+    'MusicBrainz Artist Id',
+    'MUSICBRAINZ_ARTISTID',
+    'musicbrainz_artistid',
+]
+
+ARTIST_NAME_TAGS = [
+    'artist',
+    'ARTIST',
+    'Artist',
+    'album_artist',
+    'ALBUM_ARTIST',
+]
+
+
+def ffmpeg_get_info(filepath: str) -> Optional[dict]:
     """
-    Get track artist and artist id from ffmpeg info
+    Get audio file metadata using ffprobe.
+
     Args:
-        track_info: json with ffmpeg info
+        filepath: Path to audio file
 
-    Returns: tuple with track artist and artist id
-
+    Returns:
+        Dict with ffprobe JSON output, or None on error
     """
-    track_artist = track_info["format"]["tags"]['artist']
-    if not track_artist:
-        logger.error(f"Error getting track artist from ffmpeg info: {track_info}")
-        return None, None
-    else:
-        logger.info(f"Got track artist {track_artist} from ffmpeg info for {track_info['format']['filename']}")
-        artist_mbid = track_info["format"]["tags"]['MusicBrainz Artist Id']
-        if not artist_mbid:
-            logger.error(f"Error getting artist mbid from ffmpeg info: {track_info}")
-            return track_artist, None
-        else:
-            logger.info(f"Got artist mbid {artist_mbid} from ffmpeg info for {track_info['format']['filename']}")
-            return track_artist, artist_mbid
+    if not filepath:
+        return None
+
+    logger.debug(f"Getting ffprobe info for {filepath}")
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-print_format", "json",
+        "-show_format",
+        "-show_streams",
+        filepath
+    ]
+
+    try:
+        result = s.run(cmd, stdout=s.PIPE, stderr=s.PIPE, text=True)
+
+        if result.returncode != 0:
+            logger.debug(f"ffprobe error for {filepath}: {result.stderr}")
+            return None
+
+        return json.loads(result.stdout)
+    except Exception as e:
+        logger.debug(f"Exception running ffprobe for {filepath}: {e}")
+        return None
+
+
+def ffmpeg_get_mbtid(track_info: dict) -> Optional[str]:
+    """
+    Extract MusicBrainz Track/Recording ID from ffprobe output.
+
+    Args:
+        track_info: Dict from ffprobe JSON output
+
+    Returns:
+        MusicBrainz ID if found, None otherwise
+    """
+    mbid = _get_tag_safe(track_info, TRACK_MBID_TAGS)
+
+    if mbid:
+        logger.debug(f"Found track MBID: {mbid}")
+
+    return mbid
+
+
+def ffmpeg_get_artist_mbid(track_info: dict) -> Optional[str]:
+    """
+    Extract MusicBrainz Artist ID from ffprobe output.
+
+    Args:
+        track_info: Dict from ffprobe JSON output
+
+    Returns:
+        MusicBrainz Artist ID if found, None otherwise
+    """
+    mbid = _get_tag_safe(track_info, ARTIST_MBID_TAGS)
+
+    if mbid:
+        logger.debug(f"Found artist MBID: {mbid}")
+
+    return mbid
+
+
+def ffmpeg_get_artist_name(track_info: dict) -> Optional[str]:
+    """
+    Extract artist name from ffprobe output.
+
+    Args:
+        track_info: Dict from ffprobe JSON output
+
+    Returns:
+        Artist name if found, None otherwise
+    """
+    return _get_tag_safe(track_info, ARTIST_NAME_TAGS)
+
+
+def ffmpeg_get_track_artist_and_artist_mbid(track_info: dict) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extract artist name and MusicBrainz Artist ID from ffprobe output.
+
+    Args:
+        track_info: Dict from ffprobe JSON output
+
+    Returns:
+        Tuple of (artist_name, artist_mbid), either may be None
+    """
+    artist_name = ffmpeg_get_artist_name(track_info)
+    artist_mbid = ffmpeg_get_artist_mbid(track_info)
+
+    return artist_name, artist_mbid
 
 
 def convert_m4a_to_wav(input_file):
@@ -288,20 +393,228 @@ def cleanup_temp_file(file_path: str):
         logger.error(f"Error removing temporary file {file_path}: {e}")
 
 
-def insert_track_mbid(track_id: int, mbid: str):
+def process_mbid_from_files(
+    database: Database,
+    use_test_paths: bool = False,
+    batch_size: int = 100,
+    limit: Optional[int] = None,
+) -> dict:
     """
-    Insert track mbid into database
+    Extract MusicBrainz IDs from audio files and update database.
+
+    Queries tracks that don't have MBIDs, maps their paths to local filesystem,
+    extracts MBIDs using ffprobe, and updates the database.
+
     Args:
-        track_id: track id
-        mbid: mbid
+        database: Database connection
+        use_test_paths: If True, use test path mapping; otherwise use production
+        batch_size: Log progress every N tracks
+        limit: Optional limit on number of tracks to process (for testing)
 
     Returns:
-
+        Dict with stats:
+            'total': int - tracks queried
+            'accessible': int - files that could be accessed
+            'inaccessible': int - files that couldn't be accessed
+            'extracted': int - MBIDs found in files
+            'missing': int - files without MBID tags
+            'updated': int - database rows updated
+            'errors': int - database update errors
+            'skipped': bool - True if skipped due to config/environment issues
     """
-    db.connect()
-    update_query = f"""UPDATE track_data SET mbid = '{mbid}' WHERE id = {track_id}"""
-    try:
-        db.execute_query(update_query)
-        logger.info(f"Updated {track_id} with mbid {mbid}")
-    except Exception as e:
-        logger.error(f"Error updating {track_id} with mbid {mbid}: {e}")
+    stats = {
+        'total': 0,
+        'accessible': 0,
+        'inaccessible': 0,
+        'extracted': 0,
+        'missing': 0,
+        'updated': 0,
+        'errors': 0,
+        'skipped': False,
+    }
+
+    # Validate environment first
+    if not check_ffprobe_available():
+        logger.warning("ffprobe not available - skipping MBID extraction from files")
+        stats['skipped'] = True
+        return stats
+
+    path_validation = validate_path_mapping(use_test=use_test_paths)
+    if not path_validation['configured']:
+        logger.warning("Path mapping not configured - skipping MBID extraction from files")
+        stats['skipped'] = True
+        return stats
+
+    if not path_validation['accessible']:
+        logger.warning(
+            f"Music path not accessible: {path_validation['local_prefix']} - "
+            "skipping MBID extraction from files"
+        )
+        stats['skipped'] = True
+        return stats
+
+    # Query tracks without MBIDs
+    database.connect()
+    query = """
+        SELECT id, filepath
+        FROM track_data
+        WHERE (musicbrainz_id IS NULL OR musicbrainz_id = '')
+        AND filepath IS NOT NULL AND filepath != ''
+    """
+    if limit:
+        query += f" LIMIT {limit}"
+
+    tracks = database.execute_select_query(query)
+    database.close()
+
+    if not tracks:
+        logger.info("No tracks without MBIDs found")
+        return stats
+
+    stats['total'] = len(tracks)
+    logger.info(f"Processing {stats['total']} tracks for MBID extraction")
+
+    # Process each track
+    for i, (track_id, plex_path) in enumerate(tracks):
+        # Map Plex path to local path
+        local_path = map_plex_path_to_local(plex_path, use_test=use_test_paths)
+
+        if not local_path or not verify_path_accessible(local_path):
+            stats['inaccessible'] += 1
+            continue
+
+        stats['accessible'] += 1
+
+        # Extract MBID from file
+        track_info = ffmpeg_get_info(local_path)
+        if not track_info:
+            stats['missing'] += 1
+            continue
+
+        mbid = ffmpeg_get_mbtid(track_info)
+        if not mbid:
+            stats['missing'] += 1
+            continue
+
+        stats['extracted'] += 1
+
+        # Update database
+        try:
+            update_query = "UPDATE track_data SET musicbrainz_id = %s WHERE id = %s"
+            database.execute_query(update_query, (mbid, track_id))
+            stats['updated'] += 1
+        except Exception as e:
+            logger.error(f"Error updating track {track_id} with MBID {mbid}: {e}")
+            stats['errors'] += 1
+
+        # Progress logging
+        if (i + 1) % batch_size == 0:
+            logger.info(
+                f"Progress: {i + 1}/{stats['total']} tracks processed, "
+                f"{stats['extracted']} MBIDs extracted, {stats['updated']} updated"
+            )
+
+    logger.info(
+        f"MBID extraction complete: {stats['total']} tracks, "
+        f"{stats['accessible']} accessible, {stats['extracted']} MBIDs found, "
+        f"{stats['updated']} updated"
+    )
+
+    return stats
+
+
+def process_artist_mbid_from_files(
+    database: Database,
+    use_test_paths: bool = False,
+) -> dict:
+    """
+    Extract MusicBrainz Artist IDs from audio files and update artists table.
+
+    Samples one track per artist (that doesn't have an MBID) to extract artist MBIDs.
+
+    Args:
+        database: Database connection
+        use_test_paths: If True, use test path mapping; otherwise use production
+
+    Returns:
+        Dict with stats:
+            'total': int - artists queried
+            'extracted': int - artist MBIDs found
+            'updated': int - database rows updated
+            'errors': int - database update errors
+            'skipped': bool - True if skipped due to config/environment issues
+    """
+    stats = {
+        'total': 0,
+        'extracted': 0,
+        'updated': 0,
+        'errors': 0,
+        'skipped': False,
+    }
+
+    # Validate environment first
+    if not check_ffprobe_available():
+        logger.warning("ffprobe not available - skipping artist MBID extraction from files")
+        stats['skipped'] = True
+        return stats
+
+    path_validation = validate_path_mapping(use_test=use_test_paths)
+    if not path_validation['configured'] or not path_validation['accessible']:
+        logger.warning("Path mapping not configured/accessible - skipping artist MBID extraction")
+        stats['skipped'] = True
+        return stats
+
+    # Query artists without MBIDs, with a sample track for each
+    database.connect()
+    query = """
+        SELECT a.id, a.artist, MIN(td.filepath) as sample_filepath
+        FROM artists a
+        JOIN track_data td ON td.artist_id = a.id
+        WHERE (a.musicbrainz_id IS NULL OR a.musicbrainz_id = '')
+        AND td.filepath IS NOT NULL AND td.filepath != ''
+        GROUP BY a.id, a.artist
+    """
+    artists = database.execute_select_query(query)
+    database.close()
+
+    if not artists:
+        logger.info("No artists without MBIDs found")
+        return stats
+
+    stats['total'] = len(artists)
+    logger.info(f"Processing {stats['total']} artists for MBID extraction")
+
+    for artist_id, artist_name, plex_path in artists:
+        # Map Plex path to local path
+        local_path = map_plex_path_to_local(plex_path, use_test=use_test_paths)
+
+        if not local_path or not verify_path_accessible(local_path):
+            continue
+
+        # Extract artist MBID from file
+        track_info = ffmpeg_get_info(local_path)
+        if not track_info:
+            continue
+
+        artist_mbid = ffmpeg_get_artist_mbid(track_info)
+        if not artist_mbid:
+            continue
+
+        stats['extracted'] += 1
+
+        # Update database
+        try:
+            update_query = "UPDATE artists SET musicbrainz_id = %s WHERE id = %s"
+            database.execute_query(update_query, (artist_mbid, artist_id))
+            stats['updated'] += 1
+            logger.debug(f"Updated artist '{artist_name}' with MBID {artist_mbid}")
+        except Exception as e:
+            logger.error(f"Error updating artist {artist_id} with MBID {artist_mbid}: {e}")
+            stats['errors'] += 1
+
+    logger.info(
+        f"Artist MBID extraction complete: {stats['total']} artists, "
+        f"{stats['extracted']} MBIDs found, {stats['updated']} updated"
+    )
+
+    return stats

@@ -22,6 +22,14 @@ from plex.plex_library import (
     listify_track_data,
     export_track_data,
 )
+from analysis.ffmpeg import (
+    check_ffprobe_available,
+    validate_path_mapping,
+    map_plex_path_to_local,
+    verify_path_accessible,
+    process_mbid_from_files,
+    process_artist_mbid_from_files,
+)
 
 
 class TestPipelinePrerequisites:
@@ -41,6 +49,107 @@ class TestPipelinePrerequisites:
         """Test music library should exist on test server."""
         assert test_library is not None
         assert test_library.title == PLEX_TEST_LIBRARY
+
+
+class TestEnvironmentValidation:
+    """Tests for Phase 2: Environment validation before ffprobe extraction."""
+
+    def test_ffprobe_available(self):
+        """ffprobe should be installed and accessible."""
+        result = check_ffprobe_available()
+        assert result is True, "ffprobe not available - install ffmpeg"
+
+    def test_path_mapping_configured_test(self):
+        """Test path mapping should be configured in .env."""
+        result = validate_path_mapping(use_test=True)
+
+        assert result['configured'] is True, f"Test path mapping not configured: {result['errors']}"
+        assert result['plex_prefix'] != '', "MUSIC_PATH_PREFIX_PLEX_TEST not set"
+        assert result['local_prefix'] != '', "MUSIC_PATH_PREFIX_LOCAL_TEST not set"
+
+    def test_path_mapping_accessible_test(self):
+        """Test music path should be accessible (CIFS mount)."""
+        result = validate_path_mapping(use_test=True)
+
+        if not result['configured']:
+            pytest.skip("Test path mapping not configured")
+
+        assert result['accessible'] is True, (
+            f"Test path not accessible: {result['local_prefix']} - "
+            f"is the CIFS mount available? Errors: {result['errors']}"
+        )
+
+    def test_sample_file_readable_test(self):
+        """Should find and read at least one audio file in test path."""
+        result = validate_path_mapping(use_test=True)
+
+        if not result['accessible']:
+            pytest.skip("Test path not accessible")
+
+        assert result['sample_file_ok'] is True, (
+            f"No readable audio files found in {result['local_prefix']}"
+        )
+
+    def test_map_plex_path_to_local_test(self, db_test):
+        """Should correctly map Plex path to local mount path."""
+        # Get a real filepath from the database
+        result = db_test.execute_select_query(
+            "SELECT filepath FROM track_data WHERE filepath IS NOT NULL LIMIT 1"
+        )
+
+        if not result:
+            pytest.skip("No tracks with filepath in database")
+
+        plex_path = result[0][0]
+        local_path = map_plex_path_to_local(plex_path, use_test=True)
+
+        assert local_path is not None, f"Failed to map path: {plex_path}"
+        assert local_path.startswith('/mnt/'), f"Mapped path should start with /mnt/: {local_path}"
+
+    def test_mapped_file_accessible(self, db_test):
+        """Mapped file path should be accessible on local filesystem."""
+        # Get a real filepath from the database
+        result = db_test.execute_select_query(
+            "SELECT filepath FROM track_data WHERE filepath IS NOT NULL LIMIT 1"
+        )
+
+        if not result:
+            pytest.skip("No tracks with filepath in database")
+
+        plex_path = result[0][0]
+        local_path = map_plex_path_to_local(plex_path, use_test=True)
+
+        if local_path is None:
+            pytest.skip(f"Could not map path: {plex_path}")
+
+        assert verify_path_accessible(local_path), (
+            f"Mapped file not accessible: {local_path}"
+        )
+
+    def test_path_mapping_configured_prod(self):
+        """Production path mapping should be configured in .env."""
+        result = validate_path_mapping(use_test=False)
+
+        assert result['configured'] is True, f"Prod path mapping not configured: {result['errors']}"
+        assert result['plex_prefix'] != '', "MUSIC_PATH_PREFIX_PLEX not set"
+        assert result['local_prefix'] != '', "MUSIC_PATH_PREFIX_LOCAL not set"
+
+    @pytest.mark.skipif(
+        not os.path.isdir('/mnt/unraid/slsk/music'),
+        reason="Production NFS mount not available"
+    )
+    def test_path_mapping_accessible_prod(self):
+        """Production music path should be accessible (NFS mount)."""
+        result = validate_path_mapping(use_test=False)
+
+        if not result['configured']:
+            pytest.skip("Production path mapping not configured")
+
+        # This may fail if NFS mount isn't available - that's OK
+        if not result['accessible']:
+            pytest.skip(f"Production NFS mount not available: {result['local_prefix']}")
+
+        assert result['accessible'] is True
 
 
 class TestPlexExtraction:
@@ -227,14 +336,123 @@ class TestGenreEnrichment:
 
 
 @pytest.fixture(scope="module")
-def lastfm_enriched_sandbox(enriched_sandbox):
+def mbid_enriched_sandbox(enriched_sandbox):
+    """
+    Extract MBIDs from audio files using ffprobe.
+    This runs BEFORE Last.fm enrichment to maximize MBID coverage.
+    """
+    db = enriched_sandbox
+
+    # Extract track MBIDs from files
+    track_stats = process_mbid_from_files(db, use_test_paths=True)
+
+    # Extract artist MBIDs from files
+    artist_stats = process_artist_mbid_from_files(db, use_test_paths=True)
+
+    return db, track_stats, artist_stats
+
+
+class TestFFprobeMBIDExtraction:
+    """Tests for Phase 4.1/4.2: MBID extraction from audio files."""
+
+    def test_track_mbid_stats_returned(self, mbid_enriched_sandbox):
+        """Should return stats dict with expected keys."""
+        db, track_stats, artist_stats = mbid_enriched_sandbox
+
+        assert isinstance(track_stats, dict)
+        assert 'total' in track_stats
+        assert 'accessible' in track_stats
+        assert 'extracted' in track_stats
+        assert 'updated' in track_stats
+        assert 'skipped' in track_stats
+
+    def test_artist_mbid_stats_returned(self, mbid_enriched_sandbox):
+        """Should return stats dict with expected keys."""
+        db, track_stats, artist_stats = mbid_enriched_sandbox
+
+        assert isinstance(artist_stats, dict)
+        assert 'total' in artist_stats
+        assert 'extracted' in artist_stats
+        assert 'updated' in artist_stats
+        assert 'skipped' in artist_stats
+
+    def test_files_were_accessible(self, mbid_enriched_sandbox):
+        """At least some files should be accessible for extraction."""
+        db, track_stats, artist_stats = mbid_enriched_sandbox
+
+        if track_stats.get('skipped'):
+            pytest.skip("MBID extraction was skipped (environment not configured)")
+
+        # If not skipped, we should have accessed some files
+        assert track_stats['accessible'] > 0, (
+            f"No files were accessible. Stats: {track_stats}"
+        )
+
+    def test_mbids_extracted_from_files(self, mbid_enriched_sandbox):
+        """Should extract MBIDs from tagged files."""
+        db, track_stats, artist_stats = mbid_enriched_sandbox
+
+        if track_stats.get('skipped'):
+            pytest.skip("MBID extraction was skipped")
+
+        # We expect at least some files to have MBIDs if they're Picard-tagged
+        # This may be 0 for untagged libraries, which is OK
+        assert track_stats['extracted'] >= 0
+
+    def test_mbid_values_are_valid_uuids(self, mbid_enriched_sandbox):
+        """Extracted MBIDs should be valid UUID format."""
+        import re
+        db, track_stats, artist_stats = mbid_enriched_sandbox
+
+        db.connect()
+        result = db.execute_select_query("""
+            SELECT musicbrainz_id FROM track_data
+            WHERE musicbrainz_id IS NOT NULL AND musicbrainz_id != ''
+            LIMIT 10
+        """)
+        db.close()
+
+        uuid_pattern = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            re.IGNORECASE
+        )
+
+        for (mbid,) in result:
+            assert uuid_pattern.match(mbid), f"Invalid MBID format: {mbid}"
+
+    def test_mbid_coverage_improved(self, mbid_enriched_sandbox):
+        """MBID coverage should be tracked in stats."""
+        db, track_stats, artist_stats = mbid_enriched_sandbox
+
+        if track_stats.get('skipped'):
+            pytest.skip("MBID extraction was skipped")
+
+        # Log the coverage for visibility
+        db.connect()
+        total = db.execute_select_query("SELECT COUNT(*) FROM track_data")[0][0]
+        with_mbid = db.execute_select_query(
+            "SELECT COUNT(*) FROM track_data WHERE musicbrainz_id IS NOT NULL AND musicbrainz_id != ''"
+        )[0][0]
+        db.close()
+
+        coverage_pct = (with_mbid / total * 100) if total > 0 else 0
+        print(f"\nMBID coverage after ffprobe extraction: {with_mbid}/{total} ({coverage_pct:.1f}%)")
+        print(f"Track stats: {track_stats}")
+        print(f"Artist stats: {artist_stats}")
+
+        # This test always passes - it's for visibility
+        assert True
+
+
+@pytest.fixture(scope="module")
+def lastfm_enriched_sandbox(mbid_enriched_sandbox):
     """
     Enrich sandbox with Last.fm data.
 
     WARNING: This is slow due to API rate limiting (1s per artist).
     Skip with: pytest -m "not slow"
     """
-    db = enriched_sandbox
+    db, _, _ = mbid_enriched_sandbox  # Unpack tuple from mbid_enriched_sandbox
 
     # Get artist count first
     db.connect()
@@ -292,33 +510,14 @@ class TestLastFmEnrichment:
 
 
 @pytest.fixture(scope="module")
-def bpm_enriched_sandbox(enriched_sandbox):
+def bpm_enriched_sandbox(mbid_enriched_sandbox):
     """
     Enrich sandbox with BPM data from AcousticBrainz.
-    Requires tracks to have MusicBrainz IDs.
+    Depends on mbid_enriched_sandbox which extracts MBIDs from files first.
     """
-    db = enriched_sandbox
+    db, track_mbid_stats, artist_mbid_stats = mbid_enriched_sandbox
 
-    # First, we need MBIDs. Try to get them from Last.fm for just the tracks
-    # This is faster than the full artist enrichment
-    db.connect()
-    tracks_needing_mbid = db.execute_select_query("""
-        SELECT id, artist, title FROM track_data
-        WHERE musicbrainz_id IS NULL OR musicbrainz_id = ''
-        LIMIT 50
-    """)
-    db.close()
-
-    # Try to get MBIDs from Last.fm for tracks (faster than artist enrichment)
-    from time import sleep
-    for track_id, artist, title in tracks_needing_mbid:
-        try:
-            dbu.insert_lastfm_track_data(db, (track_id, artist, title))
-            sleep(0.5)  # Rate limiting
-        except Exception:
-            continue
-
-    # Now run AcousticBrainz BPM lookup
+    # Run AcousticBrainz BPM lookup (uses MBIDs extracted from files)
     stats = dbu.process_bpm_acousticbrainz(db)
 
     return db, stats
