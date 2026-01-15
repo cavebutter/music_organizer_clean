@@ -10,6 +10,7 @@ from analysis.ffmpeg import (
 from loguru import logger
 import csv
 import json
+import os
 import re
 from time import sleep
 from typing import Optional
@@ -448,9 +449,9 @@ def process_bpm_acousticbrainz(database: Database) -> dict:
 def process_bpm_essentia(
     database: Database,
     use_test_paths: bool = False,
-    batch_size: int = 50,
+    batch_size: int = 25,
     limit: Optional[int] = None,
-    rest_between_batches: float = 1.0,
+    rest_between_batches: float = 10.0,
 ) -> dict:
     """
     Analyze BPM locally using Essentia for tracks without BPM data.
@@ -462,9 +463,12 @@ def process_bpm_essentia(
     Args:
         database: Database connection object
         use_test_paths: If True, use test path mapping; otherwise use production
-        batch_size: Number of tracks to process before logging progress and resting
+        batch_size: Number of tracks to process before logging progress and resting.
+            Smaller batches = more frequent rest periods. Default 25.
         limit: Optional limit on number of tracks to process (for testing)
-        rest_between_batches: Seconds to pause between batches (CPU cooldown)
+        rest_between_batches: Seconds to pause between batches for CPU thermal
+            management. Audio analysis is CPU-intensive; insufficient rest can
+            cause system overheating. Default 10 seconds is conservative.
 
     Returns:
         Dict with stats:
@@ -528,27 +532,40 @@ def process_bpm_essentia(
         return stats
 
     stats['total'] = len(tracks)
-    logger.info(f"Processing {stats['total']} tracks for local BPM analysis")
+    logger.info(
+        f"Starting Essentia BPM analysis: {stats['total']} tracks, "
+        f"batch_size={batch_size}, rest={rest_between_batches}s"
+    )
 
     # Process tracks in batches
     for i, (track_id, plex_path) in enumerate(tracks):
+        # Log before processing each track (helps identify crash point)
+        logger.debug(f"[{i + 1}/{stats['total']}] Processing track_id={track_id}")
+
         # Map Plex path to local path
         local_path = map_plex_path_to_local(plex_path, use_test=use_test_paths)
 
         if not local_path or not verify_path_accessible(local_path):
+            logger.debug(f"  Skipped: file not accessible")
             stats['inaccessible'] += 1
             continue
 
         stats['accessible'] += 1
 
+        # Log the file being analyzed (this is where CPU-intensive work happens)
+        filename = os.path.basename(local_path) if local_path else "unknown"
+        logger.debug(f"  Analyzing: {filename}")
+
         # Analyze BPM
         bpm_value = bpm_analysis.get_bpm_essentia(local_path)
 
         if bpm_value is None:
+            logger.debug(f"  Failed: no BPM detected")
             stats['failed'] += 1
             continue
 
         stats['analyzed'] += 1
+        logger.debug(f"  BPM: {bpm_value:.1f}")
 
         # Update database
         try:
@@ -565,11 +582,13 @@ def process_bpm_essentia(
         # Progress logging and rest between batches
         if (i + 1) % batch_size == 0:
             logger.info(
-                f"Progress: {i + 1}/{stats['total']} tracks processed, "
-                f"{stats['analyzed']} analyzed, {stats['updated']} updated"
+                f"Batch complete: {i + 1}/{stats['total']} tracks, "
+                f"{stats['analyzed']} analyzed, {stats['updated']} updated. "
+                f"Resting {rest_between_batches}s for CPU cooldown..."
             )
             if rest_between_batches > 0:
                 sleep(rest_between_batches)
+            logger.debug("Rest complete, resuming processing")
 
     # Final summary
     logger.info(

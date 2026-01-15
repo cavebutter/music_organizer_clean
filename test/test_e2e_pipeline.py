@@ -606,7 +606,13 @@ def essentia_bpm_sandbox(bpm_enriched_sandbox):
     db, acousticbrainz_stats = bpm_enriched_sandbox
 
     # Run Essentia BPM analysis for tracks still without BPM
-    essentia_stats = dbu.process_bpm_essentia(db, use_test_paths=True, batch_size=10)
+    # Conservative settings to prevent CPU overheating during extended analysis
+    essentia_stats = dbu.process_bpm_essentia(
+        db,
+        use_test_paths=True,
+        batch_size=25,
+        rest_between_batches=10.0,
+    )
 
     return db, acousticbrainz_stats, essentia_stats
 
