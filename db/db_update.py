@@ -1,11 +1,18 @@
 from . import DB_PATH, DB_USER, DB_PASSWORD, DB_DATABASE, DB_PORT, TEST_DB
 from .database import Database
 import analysis.acousticbrainz as acousticbrainz
+import analysis.bpm as bpm_analysis
+from analysis.ffmpeg import (
+    validate_path_mapping,
+    map_plex_path_to_local,
+    verify_path_accessible,
+)
 from loguru import logger
 import csv
 import json
 import re
 from time import sleep
+from typing import Optional
 import analysis.lastfm as lastfm
 import pdb
 
@@ -434,6 +441,146 @@ def process_bpm_acousticbrainz(database: Database) -> dict:
 
     logger.info(f"AcousticBrainz BPM lookup complete: {stats}")
     logger.info(f"Hit rate: {stats['hits']/total*100:.1f}%")
+
+    return stats
+
+
+def process_bpm_essentia(
+    database: Database,
+    use_test_paths: bool = False,
+    batch_size: int = 50,
+    limit: Optional[int] = None,
+    rest_between_batches: float = 1.0,
+) -> dict:
+    """
+    Analyze BPM locally using Essentia for tracks without BPM data.
+
+    This is Phase 7.2 in the pipeline - a fallback for tracks that didn't get
+    BPM from AcousticBrainz (Phase 7.1). It analyzes the actual audio files
+    using Essentia's RhythmExtractor2013 algorithm.
+
+    Args:
+        database: Database connection object
+        use_test_paths: If True, use test path mapping; otherwise use production
+        batch_size: Number of tracks to process before logging progress and resting
+        limit: Optional limit on number of tracks to process (for testing)
+        rest_between_batches: Seconds to pause between batches (CPU cooldown)
+
+    Returns:
+        Dict with stats:
+            'total': int - tracks queried (without BPM)
+            'accessible': int - files that could be accessed
+            'inaccessible': int - files that couldn't be accessed
+            'analyzed': int - tracks successfully analyzed
+            'failed': int - tracks where analysis failed
+            'updated': int - database rows updated
+            'errors': int - database update errors
+            'skipped': bool - True if skipped due to config/environment issues
+    """
+    stats = {
+        'total': 0,
+        'accessible': 0,
+        'inaccessible': 0,
+        'analyzed': 0,
+        'failed': 0,
+        'updated': 0,
+        'errors': 0,
+        'skipped': False,
+    }
+
+    # Check Essentia availability
+    if not bpm_analysis.check_essentia_available():
+        logger.warning("Essentia not available - skipping local BPM analysis")
+        stats['skipped'] = True
+        return stats
+
+    # Validate path mapping
+    path_validation = validate_path_mapping(use_test=use_test_paths)
+    if not path_validation['configured']:
+        logger.warning("Path mapping not configured - skipping local BPM analysis")
+        stats['skipped'] = True
+        return stats
+
+    if not path_validation['accessible']:
+        logger.warning(
+            f"Music path not accessible: {path_validation['local_prefix']} - "
+            "skipping local BPM analysis"
+        )
+        stats['skipped'] = True
+        return stats
+
+    # Query tracks without BPM
+    database.connect()
+    query = """
+        SELECT id, filepath
+        FROM track_data
+        WHERE (bpm IS NULL OR bpm = 0)
+        AND filepath IS NOT NULL AND filepath != ''
+    """
+    if limit:
+        query += f" LIMIT {limit}"
+
+    tracks = database.execute_select_query(query)
+    database.close()
+
+    if not tracks:
+        logger.info("No tracks without BPM found")
+        return stats
+
+    stats['total'] = len(tracks)
+    logger.info(f"Processing {stats['total']} tracks for local BPM analysis")
+
+    # Process tracks in batches
+    for i, (track_id, plex_path) in enumerate(tracks):
+        # Map Plex path to local path
+        local_path = map_plex_path_to_local(plex_path, use_test=use_test_paths)
+
+        if not local_path or not verify_path_accessible(local_path):
+            stats['inaccessible'] += 1
+            continue
+
+        stats['accessible'] += 1
+
+        # Analyze BPM
+        bpm_value = bpm_analysis.get_bpm_essentia(local_path)
+
+        if bpm_value is None:
+            stats['failed'] += 1
+            continue
+
+        stats['analyzed'] += 1
+
+        # Update database
+        try:
+            bpm_int = round(bpm_value)
+            database.execute_query(
+                "UPDATE track_data SET bpm = %s WHERE id = %s",
+                (bpm_int, track_id)
+            )
+            stats['updated'] += 1
+        except Exception as e:
+            logger.error(f"Error updating track {track_id} with BPM {bpm_value}: {e}")
+            stats['errors'] += 1
+
+        # Progress logging and rest between batches
+        if (i + 1) % batch_size == 0:
+            logger.info(
+                f"Progress: {i + 1}/{stats['total']} tracks processed, "
+                f"{stats['analyzed']} analyzed, {stats['updated']} updated"
+            )
+            if rest_between_batches > 0:
+                sleep(rest_between_batches)
+
+    # Final summary
+    logger.info(
+        f"Essentia BPM analysis complete: {stats['total']} tracks, "
+        f"{stats['accessible']} accessible, {stats['analyzed']} analyzed, "
+        f"{stats['updated']} updated"
+    )
+
+    if stats['total'] > 0:
+        coverage_pct = stats['analyzed'] / stats['total'] * 100
+        logger.info(f"Analysis success rate: {coverage_pct:.1f}%")
 
     return stats
 

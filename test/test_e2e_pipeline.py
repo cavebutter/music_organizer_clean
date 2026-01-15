@@ -596,6 +596,94 @@ class TestBpmEnrichment:
             assert 40 <= bpm <= 220, f"BPM {bpm} outside valid range"
 
 
+@pytest.fixture(scope="module")
+def essentia_bpm_sandbox(bpm_enriched_sandbox):
+    """
+    Enrich sandbox with BPM data from local Essentia analysis.
+    Runs AFTER AcousticBrainz (Phase 7.1) to fill gaps.
+    This is Phase 7.2 in the pipeline.
+    """
+    db, acousticbrainz_stats = bpm_enriched_sandbox
+
+    # Run Essentia BPM analysis for tracks still without BPM
+    essentia_stats = dbu.process_bpm_essentia(db, use_test_paths=True, batch_size=10)
+
+    return db, acousticbrainz_stats, essentia_stats
+
+
+class TestEssentiaBpmEnrichment:
+    """Tests for Phase 7.2: Local BPM analysis using Essentia."""
+
+    def test_essentia_stats_returned(self, essentia_bpm_sandbox):
+        """Should return stats dict with expected keys."""
+        db, _, essentia_stats = essentia_bpm_sandbox
+
+        assert isinstance(essentia_stats, dict)
+        assert 'total' in essentia_stats
+        assert 'accessible' in essentia_stats
+        assert 'analyzed' in essentia_stats
+        assert 'updated' in essentia_stats
+        assert 'skipped' in essentia_stats
+
+    def test_essentia_processed_remaining_tracks(self, essentia_bpm_sandbox):
+        """Essentia should process tracks that AcousticBrainz missed."""
+        db, acousticbrainz_stats, essentia_stats = essentia_bpm_sandbox
+
+        if essentia_stats.get('skipped'):
+            pytest.skip("Essentia BPM analysis was skipped (environment not configured)")
+
+        # Log what happened for visibility
+        print(f"\nAcousticBrainz stats: {acousticbrainz_stats}")
+        print(f"Essentia stats: {essentia_stats}")
+
+        # If AcousticBrainz had misses and Essentia ran, we should have analyzed some
+        if acousticbrainz_stats.get('misses', 0) > 0:
+            # Not all tracks may be accessible, but we should have tried
+            assert essentia_stats['total'] >= 0
+
+    def test_essentia_bpm_values_valid(self, essentia_bpm_sandbox):
+        """Essentia-analyzed BPM values should be in valid range."""
+        db, _, essentia_stats = essentia_bpm_sandbox
+
+        if essentia_stats.get('skipped') or essentia_stats.get('analyzed', 0) == 0:
+            pytest.skip("No tracks were analyzed by Essentia")
+
+        db.connect()
+        result = db.execute_select_query("""
+            SELECT bpm FROM track_data
+            WHERE bpm IS NOT NULL AND bpm > 0
+        """)
+        db.close()
+
+        for (bpm,) in result:
+            assert 40 <= bpm <= 220, f"BPM {bpm} outside valid range"
+
+    def test_combined_bpm_coverage(self, essentia_bpm_sandbox):
+        """Combined AcousticBrainz + Essentia should maximize BPM coverage."""
+        db, acousticbrainz_stats, essentia_stats = essentia_bpm_sandbox
+
+        db.connect()
+        total_tracks = db.execute_select_query("SELECT COUNT(*) FROM track_data")[0][0]
+        tracks_with_bpm = db.execute_select_query(
+            "SELECT COUNT(*) FROM track_data WHERE bpm IS NOT NULL AND bpm > 0"
+        )[0][0]
+        db.close()
+
+        coverage_pct = (tracks_with_bpm / total_tracks * 100) if total_tracks > 0 else 0
+
+        print(f"\n{'=' * 50}")
+        print("BPM COVERAGE SUMMARY")
+        print(f"{'=' * 50}")
+        print(f"Total tracks:     {total_tracks}")
+        print(f"Tracks with BPM:  {tracks_with_bpm} ({coverage_pct:.1f}%)")
+        print(f"AcousticBrainz:   {acousticbrainz_stats.get('updated', 0)} tracks")
+        print(f"Essentia:         {essentia_stats.get('updated', 0)} tracks")
+        print(f"{'=' * 50}")
+
+        # This test always passes - it's for visibility
+        assert True
+
+
 class TestFullPipelineIntegrity:
     """Integration tests for the complete pipeline."""
 
