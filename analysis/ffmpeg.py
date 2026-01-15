@@ -1,10 +1,173 @@
-import db.db_update as dbu
 import subprocess as s
 import os
+from typing import Optional
 from loguru import logger
 import json
+from dotenv import load_dotenv
 
-db = dbu.database
+load_dotenv()
+
+# Path mapping configuration from environment
+MUSIC_PATH_PREFIX_PLEX = os.getenv("MUSIC_PATH_PREFIX_PLEX", "")
+MUSIC_PATH_PREFIX_LOCAL = os.getenv("MUSIC_PATH_PREFIX_LOCAL", "")
+MUSIC_PATH_PREFIX_PLEX_TEST = os.getenv("MUSIC_PATH_PREFIX_PLEX_TEST", "")
+MUSIC_PATH_PREFIX_LOCAL_TEST = os.getenv("MUSIC_PATH_PREFIX_LOCAL_TEST", "")
+
+
+def check_ffprobe_available() -> bool:
+    """
+    Check if ffprobe is installed and accessible.
+
+    Returns:
+        True if ffprobe is available, False otherwise
+    """
+    try:
+        result = s.run(
+            ["ffprobe", "-version"],
+            stdout=s.PIPE,
+            stderr=s.PIPE,
+            text=True
+        )
+        if result.returncode == 0:
+            logger.debug("ffprobe is available")
+            return True
+        else:
+            logger.warning("ffprobe returned non-zero exit code")
+            return False
+    except FileNotFoundError:
+        logger.error("ffprobe not found - please install ffmpeg")
+        return False
+    except Exception as e:
+        logger.error(f"Error checking ffprobe availability: {e}")
+        return False
+
+
+def validate_path_mapping(use_test: bool = False) -> dict:
+    """
+    Validate that path mapping is configured and paths are accessible.
+
+    Args:
+        use_test: If True, validate test path mapping; otherwise validate production
+
+    Returns:
+        dict with keys:
+            'configured': bool - env vars are set
+            'accessible': bool - local path exists and is readable
+            'plex_prefix': str - the Plex path prefix
+            'local_prefix': str - the local path prefix
+            'sample_file_ok': bool - at least one file is accessible (if accessible=True)
+            'errors': list[str] - any error messages
+    """
+    result = {
+        'configured': False,
+        'accessible': False,
+        'plex_prefix': '',
+        'local_prefix': '',
+        'sample_file_ok': False,
+        'errors': []
+    }
+
+    if use_test:
+        plex_prefix = MUSIC_PATH_PREFIX_PLEX_TEST
+        local_prefix = MUSIC_PATH_PREFIX_LOCAL_TEST
+        env_name = "test"
+    else:
+        plex_prefix = MUSIC_PATH_PREFIX_PLEX
+        local_prefix = MUSIC_PATH_PREFIX_LOCAL
+        env_name = "production"
+
+    result['plex_prefix'] = plex_prefix
+    result['local_prefix'] = local_prefix
+
+    # Check if env vars are configured
+    if not plex_prefix:
+        result['errors'].append(f"MUSIC_PATH_PREFIX_PLEX{'_TEST' if use_test else ''} not configured")
+    if not local_prefix:
+        result['errors'].append(f"MUSIC_PATH_PREFIX_LOCAL{'_TEST' if use_test else ''} not configured")
+
+    if not plex_prefix or not local_prefix:
+        logger.warning(f"Path mapping not configured for {env_name}")
+        return result
+
+    result['configured'] = True
+
+    # Check if local path exists
+    if os.path.isdir(local_prefix):
+        result['accessible'] = True
+        logger.info(f"Local path accessible: {local_prefix}")
+
+        # Try to find at least one audio file to verify read access
+        for root, dirs, files in os.walk(local_prefix):
+            for f in files:
+                if f.lower().endswith(('.mp3', '.flac', '.m4a')):
+                    test_file = os.path.join(root, f)
+                    if os.access(test_file, os.R_OK):
+                        result['sample_file_ok'] = True
+                        logger.debug(f"Sample file accessible: {test_file}")
+                        break
+            if result['sample_file_ok']:
+                break
+
+        if not result['sample_file_ok']:
+            result['errors'].append(f"No readable audio files found in {local_prefix}")
+            logger.warning(f"No readable audio files found in {local_prefix}")
+    else:
+        result['errors'].append(f"Local path not accessible: {local_prefix}")
+        logger.warning(f"Local path not accessible: {local_prefix} - is the mount available?")
+
+    return result
+
+
+def map_plex_path_to_local(plex_path: str, use_test: bool = False) -> Optional[str]:
+    """
+    Map a Plex-stored filepath to a locally accessible path.
+
+    Args:
+        plex_path: Path as stored in database (from Plex)
+        use_test: If True, use test path mapping; otherwise use production
+
+    Returns:
+        Local path if mapping succeeds, None if path cannot be mapped
+
+    Example:
+        Plex path: /volume1/media/music/test-library/Artist/Album/track.flac
+        Local path: /mnt/synology-temp/music/test-library/Artist/Album/track.flac
+    """
+    if use_test:
+        prefix_from = MUSIC_PATH_PREFIX_PLEX_TEST
+        prefix_to = MUSIC_PATH_PREFIX_LOCAL_TEST
+    else:
+        prefix_from = MUSIC_PATH_PREFIX_PLEX
+        prefix_to = MUSIC_PATH_PREFIX_LOCAL
+
+    if not prefix_from or not prefix_to:
+        logger.debug(f"Path mapping not configured (use_test={use_test})")
+        return None
+
+    if not plex_path:
+        return None
+
+    if plex_path.startswith(prefix_from):
+        local_path = plex_path.replace(prefix_from, prefix_to, 1)
+        return local_path
+    else:
+        logger.debug(f"Path does not match expected prefix '{prefix_from}': {plex_path[:80]}...")
+        return None
+
+
+def verify_path_accessible(filepath: str) -> bool:
+    """
+    Check if a file path exists and is readable.
+
+    Args:
+        filepath: Full path to the file
+
+    Returns:
+        True if file exists and is readable, False otherwise
+    """
+    if not filepath:
+        return False
+    return os.path.isfile(filepath) and os.access(filepath, os.R_OK)
 
 def ffmpeg_get_info(track) -> json:
     """

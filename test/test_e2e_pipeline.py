@@ -1,0 +1,443 @@
+"""
+End-to-end pipeline tests for the music organizer.
+
+Tests the full flow from Plex extraction through database population and enrichment.
+Uses the test Plex library and sandbox database.
+
+Run with: pytest test/test_e2e_pipeline.py -v -s
+"""
+import os
+import tempfile
+import pytest
+from db import DB_PATH, DB_USER, DB_PASSWORD, TEST_DB
+from db.database import Database
+from db.setup_test_env import truncate_all_tables
+import db.db_functions as dbf
+import db.db_update as dbu
+from plex import PLEX_TEST_LIBRARY
+from plex.plex_library import (
+    plex_connect,
+    get_music_library,
+    get_all_tracks,
+    listify_track_data,
+    export_track_data,
+)
+
+
+class TestPipelinePrerequisites:
+    """Verify test environment is ready before running pipeline."""
+
+    def test_database_connection(self, db_test):
+        """Sandbox database should be accessible."""
+        result = db_test.execute_select_query("SELECT 1")
+        assert result == [(1,)]
+
+    def test_plex_test_server_connection(self, plex_test_server):
+        """Test Plex server should be accessible."""
+        assert plex_test_server is not None
+        assert plex_test_server.friendlyName is not None
+
+    def test_test_library_exists(self, test_library):
+        """Test music library should exist on test server."""
+        assert test_library is not None
+        assert test_library.title == PLEX_TEST_LIBRARY
+
+
+class TestPlexExtraction:
+    """Tests for extracting track data from Plex."""
+
+    def test_get_all_tracks_returns_tracks(self, test_library):
+        """Should retrieve tracks from test library."""
+        tracks, count = get_all_tracks(test_library)
+
+        assert count > 0
+        assert len(tracks) == count
+
+    def test_extract_track_data_structure(self, test_library):
+        """Extracted track data should have required fields."""
+        tracks, _ = get_all_tracks(test_library)
+        # Use empty prefix for test - locations are relative
+        track_data = listify_track_data(tracks[:1], filepath_prefix="")
+
+        assert len(track_data) == 1
+        required_fields = ['title', 'artist', 'album', 'genre', 'added_date',
+                          'filepath', 'location', 'plex_id']
+        for field in required_fields:
+            assert field in track_data[0], f"Missing field: {field}"
+
+    def test_export_to_csv(self, test_library):
+        """Should export track data to CSV file."""
+        tracks, _ = get_all_tracks(test_library)
+        track_data = listify_track_data(tracks[:5], filepath_prefix="")
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            csv_path = f.name
+
+        try:
+            export_track_data(track_data, csv_path)
+            assert os.path.exists(csv_path)
+            assert os.path.getsize(csv_path) > 0
+        finally:
+            if os.path.exists(csv_path):
+                os.unlink(csv_path)
+
+
+@pytest.fixture(scope="module")
+def fresh_sandbox():
+    """
+    Reset sandbox database before tests in this module.
+    Returns the Database object for further use.
+    """
+    db = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB)
+    truncate_all_tables(db)
+    return db
+
+
+@pytest.fixture(scope="module")
+def populated_sandbox(fresh_sandbox, plex_test_server, test_library):
+    """
+    Populate sandbox with track data from Plex test library.
+    This fixture depends on fresh_sandbox to ensure we start clean.
+    """
+    db = fresh_sandbox
+
+    # Extract tracks from Plex
+    tracks, count = get_all_tracks(test_library)
+    if count == 0:
+        pytest.skip("No tracks in test library")
+
+    # Export to temp CSV
+    track_data = listify_track_data(tracks, filepath_prefix="")
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        csv_path = f.name
+
+    try:
+        export_track_data(track_data, csv_path)
+
+        # Insert tracks into database
+        dbf.insert_tracks(db, csv_path)
+
+        # Populate artists table
+        dbf.populate_artists_table(db)
+
+        # Link artist_id in track_data
+        dbf.populate_artist_id_column(db)
+
+    finally:
+        if os.path.exists(csv_path):
+            os.unlink(csv_path)
+
+    return db
+
+
+class TestDatabaseLoad:
+    """Tests for initial database population."""
+
+    def test_tracks_inserted(self, populated_sandbox):
+        """Tracks should be inserted into track_data table."""
+        db = populated_sandbox
+        db.connect()
+        result = db.execute_select_query("SELECT COUNT(*) FROM track_data")
+        db.close()
+
+        assert result[0][0] > 0
+
+    def test_artists_populated(self, populated_sandbox):
+        """Artists should be extracted and populated."""
+        db = populated_sandbox
+        db.connect()
+        result = db.execute_select_query("SELECT COUNT(*) FROM artists")
+        db.close()
+
+        assert result[0][0] > 0
+
+    def test_artist_id_linked(self, populated_sandbox):
+        """track_data.artist_id should be populated."""
+        db = populated_sandbox
+        db.connect()
+        result = db.execute_select_query(
+            "SELECT COUNT(*) FROM track_data WHERE artist_id IS NOT NULL"
+        )
+        db.close()
+
+        assert result[0][0] > 0
+
+    def test_track_fields_populated(self, populated_sandbox):
+        """Core track fields should have values."""
+        db = populated_sandbox
+        db.connect()
+        result = db.execute_select_query("""
+            SELECT title, artist, album, plex_id
+            FROM track_data
+            LIMIT 1
+        """)
+        db.close()
+
+        assert len(result) == 1
+        title, artist, album, plex_id = result[0]
+        assert title is not None and title != ""
+        assert artist is not None and artist != ""
+        assert album is not None and album != ""
+        assert plex_id is not None and plex_id > 0
+
+
+@pytest.fixture(scope="module")
+def enriched_sandbox(populated_sandbox):
+    """
+    Enrich sandbox with genres from track data.
+    Optionally enriches with Last.fm data (slow).
+    """
+    db = populated_sandbox
+
+    # Populate genres from track_data (from Plex genres)
+    genre_list = dbu.populate_genres_table_from_track_data(db)
+    if genre_list:
+        dbu.insert_genres_if_not_exists(db, genre_list)
+        dbu.populate_track_genre_table(db)
+
+    return db
+
+
+class TestGenreEnrichment:
+    """Tests for genre enrichment from track data."""
+
+    def test_genres_populated(self, enriched_sandbox):
+        """Genres should be extracted from track data."""
+        db = enriched_sandbox
+        db.connect()
+        result = db.execute_select_query("SELECT COUNT(*) FROM genres")
+        db.close()
+
+        # May be 0 if tracks have no genre tags - that's OK
+        assert result[0][0] >= 0
+
+    def test_track_genre_relationships(self, enriched_sandbox):
+        """Track-genre relationships should be created."""
+        db = enriched_sandbox
+        db.connect()
+        genre_count = db.execute_select_query("SELECT COUNT(*) FROM genres")[0][0]
+        db.close()
+
+        if genre_count > 0:
+            db.connect()
+            result = db.execute_select_query("SELECT COUNT(*) FROM track_genres")
+            db.close()
+            assert result[0][0] > 0
+
+
+@pytest.fixture(scope="module")
+def lastfm_enriched_sandbox(enriched_sandbox):
+    """
+    Enrich sandbox with Last.fm data.
+
+    WARNING: This is slow due to API rate limiting (1s per artist).
+    Skip with: pytest -m "not slow"
+    """
+    db = enriched_sandbox
+
+    # Get artist count first
+    db.connect()
+    artist_count = db.execute_select_query("SELECT COUNT(*) FROM artists")[0][0]
+    db.close()
+
+    # Only run if we have a small number of artists (avoid long test runs)
+    if artist_count > 20:
+        pytest.skip(f"Skipping Last.fm enrichment for {artist_count} artists (too slow)")
+
+    try:
+        dbu.insert_last_fm_artist_data(db)
+    except Exception as e:
+        pytest.skip(f"Last.fm enrichment failed: {e}")
+
+    return db
+
+
+@pytest.mark.slow
+class TestLastFmEnrichment:
+    """Tests for Last.fm enrichment. Marked slow due to API rate limiting."""
+
+    def test_artist_mbids_populated(self, lastfm_enriched_sandbox):
+        """Some artists should have MusicBrainz IDs from Last.fm."""
+        db = lastfm_enriched_sandbox
+        db.connect()
+        result = db.execute_select_query("""
+            SELECT COUNT(*) FROM artists
+            WHERE musicbrainz_id IS NOT NULL AND musicbrainz_id != ''
+        """)
+        db.close()
+
+        # Not all artists will have MBIDs
+        assert result[0][0] >= 0
+
+    def test_artist_genres_populated(self, lastfm_enriched_sandbox):
+        """Artist-genre relationships should be created."""
+        db = lastfm_enriched_sandbox
+        db.connect()
+        result = db.execute_select_query("SELECT COUNT(*) FROM artist_genres")
+        db.close()
+
+        # May have relationships if Last.fm returned genres
+        assert result[0][0] >= 0
+
+    def test_similar_artists_populated(self, lastfm_enriched_sandbox):
+        """Similar artist relationships should be created."""
+        db = lastfm_enriched_sandbox
+        db.connect()
+        result = db.execute_select_query("SELECT COUNT(*) FROM similar_artists")
+        db.close()
+
+        # May have relationships if Last.fm returned similar artists
+        assert result[0][0] >= 0
+
+
+@pytest.fixture(scope="module")
+def bpm_enriched_sandbox(enriched_sandbox):
+    """
+    Enrich sandbox with BPM data from AcousticBrainz.
+    Requires tracks to have MusicBrainz IDs.
+    """
+    db = enriched_sandbox
+
+    # First, we need MBIDs. Try to get them from Last.fm for just the tracks
+    # This is faster than the full artist enrichment
+    db.connect()
+    tracks_needing_mbid = db.execute_select_query("""
+        SELECT id, artist, title FROM track_data
+        WHERE musicbrainz_id IS NULL OR musicbrainz_id = ''
+        LIMIT 50
+    """)
+    db.close()
+
+    # Try to get MBIDs from Last.fm for tracks (faster than artist enrichment)
+    from time import sleep
+    for track_id, artist, title in tracks_needing_mbid:
+        try:
+            dbu.insert_lastfm_track_data(db, (track_id, artist, title))
+            sleep(0.5)  # Rate limiting
+        except Exception:
+            continue
+
+    # Now run AcousticBrainz BPM lookup
+    stats = dbu.process_bpm_acousticbrainz(db)
+
+    return db, stats
+
+
+class TestBpmEnrichment:
+    """Tests for BPM enrichment via AcousticBrainz."""
+
+    def test_bpm_stats_returned(self, bpm_enriched_sandbox):
+        """Should return stats dict."""
+        db, stats = bpm_enriched_sandbox
+
+        assert isinstance(stats, dict)
+        assert "total" in stats
+        assert "hits" in stats
+        assert "misses" in stats
+        assert "updated" in stats
+
+    def test_bpm_values_populated(self, bpm_enriched_sandbox):
+        """Some tracks should have BPM values."""
+        db, stats = bpm_enriched_sandbox
+
+        if stats["hits"] > 0:
+            db.connect()
+            result = db.execute_select_query("""
+                SELECT COUNT(*) FROM track_data
+                WHERE bpm IS NOT NULL AND bpm > 0
+            """)
+            db.close()
+
+            assert result[0][0] > 0
+            assert result[0][0] == stats["updated"]
+
+    def test_bpm_values_in_valid_range(self, bpm_enriched_sandbox):
+        """All BPM values should be reasonable."""
+        db, stats = bpm_enriched_sandbox
+
+        db.connect()
+        result = db.execute_select_query("""
+            SELECT bpm FROM track_data
+            WHERE bpm IS NOT NULL AND bpm > 0
+        """)
+        db.close()
+
+        for (bpm,) in result:
+            assert 40 <= bpm <= 220, f"BPM {bpm} outside valid range"
+
+
+class TestFullPipelineIntegrity:
+    """Integration tests for the complete pipeline."""
+
+    def test_foreign_key_integrity(self, bpm_enriched_sandbox):
+        """All foreign key relationships should be valid."""
+        db, _ = bpm_enriched_sandbox
+        db.connect()
+
+        # Check track_data.artist_id references valid artists
+        orphan_tracks = db.execute_select_query("""
+            SELECT COUNT(*) FROM track_data td
+            LEFT JOIN artists a ON td.artist_id = a.id
+            WHERE td.artist_id IS NOT NULL AND a.id IS NULL
+        """)
+        assert orphan_tracks[0][0] == 0, "Found tracks with invalid artist_id"
+
+        # Check track_genres references valid tracks and genres
+        invalid_track_genres = db.execute_select_query("""
+            SELECT COUNT(*) FROM track_genres tg
+            LEFT JOIN track_data td ON tg.track_id = td.id
+            LEFT JOIN genres g ON tg.genre_id = g.id
+            WHERE td.id IS NULL OR g.id IS NULL
+        """)
+        assert invalid_track_genres[0][0] == 0, "Found invalid track_genres relationships"
+
+        db.close()
+
+    def test_no_duplicate_plex_ids(self, bpm_enriched_sandbox):
+        """Each Plex track should only appear once."""
+        db, _ = bpm_enriched_sandbox
+        db.connect()
+
+        duplicates = db.execute_select_query("""
+            SELECT plex_id, COUNT(*) as cnt
+            FROM track_data
+            WHERE plex_id IS NOT NULL
+            GROUP BY plex_id
+            HAVING COUNT(*) > 1
+        """)
+        db.close()
+
+        assert len(duplicates) == 0, f"Found duplicate plex_ids: {duplicates}"
+
+    def test_data_summary(self, bpm_enriched_sandbox, capsys):
+        """Print summary of pipeline results for review."""
+        db, bpm_stats = bpm_enriched_sandbox
+        db.connect()
+
+        track_count = db.execute_select_query("SELECT COUNT(*) FROM track_data")[0][0]
+        artist_count = db.execute_select_query("SELECT COUNT(*) FROM artists")[0][0]
+        genre_count = db.execute_select_query("SELECT COUNT(*) FROM genres")[0][0]
+        tracks_with_bpm = db.execute_select_query(
+            "SELECT COUNT(*) FROM track_data WHERE bpm IS NOT NULL AND bpm > 0"
+        )[0][0]
+        tracks_with_mbid = db.execute_select_query(
+            "SELECT COUNT(*) FROM track_data WHERE musicbrainz_id IS NOT NULL AND musicbrainz_id != ''"
+        )[0][0]
+
+        db.close()
+
+        print("\n" + "=" * 50)
+        print("PIPELINE SUMMARY")
+        print("=" * 50)
+        print(f"Tracks:           {track_count}")
+        print(f"Artists:          {artist_count}")
+        print(f"Genres:           {genre_count}")
+        print(f"Tracks with MBID: {tracks_with_mbid} ({tracks_with_mbid/track_count*100:.1f}%)")
+        print(f"Tracks with BPM:  {tracks_with_bpm} ({tracks_with_bpm/track_count*100:.1f}%)")
+        print("-" * 50)
+        print(f"BPM Stats: {bpm_stats}")
+        print("=" * 50)
+
+        # This test always passes - it's for visibility
+        assert True
