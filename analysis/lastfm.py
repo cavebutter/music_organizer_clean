@@ -36,42 +36,50 @@ def get_artist_info(artist_name):
         return None
 
 
-def get_artist_mbid(result: json):
+def get_artist_mbid(result: dict | None) -> str | None:
     """
     Retrieves the MusicBrainz ID (MBID) of the artist from the given JSON `result` object.
 
     Parameters:
-    result (json): The JSON object containing artist information.
+    result: The JSON object containing artist information.
 
     Returns:
     str: The MusicBrainz ID (MBID) of the artist, or None if the MBID is not found.
     """
+    if result is None:
+        return None
     try:
         mbid = result['artist']['mbid']
-        logger.info(f"Retrieved MBID for {result['artist']['name']}: {mbid}")
+        artist_name = result['artist'].get('name', 'Unknown')
+        logger.info(f"Retrieved MBID for {artist_name}: {mbid}")
         return mbid
     except (KeyError, TypeError) as e:
-        logger.error(f"Failed to retrieve MBID for {result['artist']['name']}: {e}")
+        artist_name = result.get('artist', {}).get('name', 'Unknown')
+        logger.error(f"Failed to retrieve MBID for {artist_name}: {e}")
         return None
 
 
-def get_artist_tags(result: json):
+def get_artist_tags(result: dict | None) -> list[str]:
     """
     Retrieves the tags from the given JSON `result` object.
 
     Parameters:
-    result (json): The JSON object containing artist information.
+    result: The JSON object containing artist information.
 
     Returns:
     list: A list of tags associated with the artist, or an empty list if no tags are found.
     """
+    if result is None:
+        return []
     try:
         tags = result['artist']['tags']['tag']
         tag_list = [tag['name'] for tag in tags]
-        logger.info(f"Retrieved tags for {result['artist']['name']}: {tag_list}")
+        artist_name = result['artist'].get('name', 'Unknown')
+        logger.info(f"Retrieved tags for {artist_name}: {tag_list}")
         return tag_list
     except (KeyError, TypeError) as e:
-        logger.error(f"Failed to retrieve tags for {result['artist']['name']}: {e}")
+        artist_name = result.get('artist', {}).get('name', 'Unknown')
+        logger.error(f"Failed to retrieve tags for {artist_name}: {e}")
         return []
 
 
