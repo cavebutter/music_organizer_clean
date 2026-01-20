@@ -206,8 +206,19 @@ def check_tags_and_insert(database: Database, lastfm_json: json, genre_list: lis
     database.close()
 
 
-def insert_last_fm_artist_data(database: Database):
+def insert_last_fm_artist_data(database: Database, rate_limit_delay: float = 0.25):
+    """
+    Enrich artist data from Last.fm API.
+
+    Fetches MBIDs, genres, and similar artists for all artists in the database.
+
+    Args:
+        database: Database connection object
+        rate_limit_delay: Seconds between API calls. Default 0.25 (4 req/s).
+            Last.fm allows ~5 req/s averaged over 5 minutes.
+    """
     logger.debug("Starting to insert Last.fm data into db.")
+    logger.info(f"Rate limit delay: {rate_limit_delay}s ({1/rate_limit_delay:.1f} req/s)")
     database.connect()
 
     try:
@@ -215,7 +226,7 @@ def insert_last_fm_artist_data(database: Database):
 
         for artist_id, artist_name in artists:
             try:
-                sleep(1)  # Rate limiting
+                sleep(rate_limit_delay)  # Rate limiting
                 artist_info = lastfm.get_artist_info(artist_name)
                 if not artist_info:
                     logger.error(f"Failed to retrieve artist info for {artist_name}")
@@ -319,64 +330,202 @@ def insert_last_fm_artist_data(database: Database):
     logger.debug("Finished inserting Last.fm data into db.")
 
 
-def insert_lastfm_track_data(database: Database, db_track_data: tuple[int, str, str]):
+def insert_lastfm_track_data(
+    database: Database,
+    db_track_data: tuple[int, str, str, str | None],
+) -> bool:
     """
-    Take db track data (id, artist name, track name) and retrieve lastfm data for each track.
-    Insert mbid into track_data table.
-    Insert genres into track_genres table.  If genre does not exist, insert into genres table, then create relationship.
+    Process a single track's Last.fm data.
+
+    Retrieves Last.fm data using MBID (preferred) or artist+track fallback.
+    Updates MBID if not already set, and inserts track genres.
+
     Args:
-        database:
-        db_track_data:
+        database: Database connection (should already be connected)
+        db_track_data: Tuple of (track_id, artist_name, track_title, existing_mbid)
 
     Returns:
-
+        bool: True if track was processed successfully, False otherwise
     """
-    database.connect()
+    track_id, artist, title, existing_mbid = db_track_data
+
     try:
-        lfm_track_data = lastfm.get_last_fm_track_data(db_track_data[1], db_track_data[2])
-        if lfm_track_data:
-            logger.debug(f"Received Last.fm data for {db_track_data[2]}: {lfm_track_data}")
+        # Prefer MBID lookup for precision, fall back to artist+track
+        lfm_track_data = lastfm.get_last_fm_track_data(
+            artist=artist,
+            track=title,
+            mbid=existing_mbid,
+        )
+        if not lfm_track_data:
+            return False
+
+        logger.debug(f"Received Last.fm data for {title}: {lfm_track_data}")
+
+        # Update MBID if we don't have one yet
+        if not existing_mbid:
             track_mbid = lastfm.get_track_mbid(lfm_track_data)
             if track_mbid:
-                database.execute_query("UPDATE track_data SET musicbrainz_id = %s WHERE id = %s", (track_mbid, db_track_data[0]))
-                logger.info(f"Inserted MBID for {db_track_data[2]}: {track_mbid}")
+                database.execute_query(
+                    "UPDATE track_data SET musicbrainz_id = %s WHERE id = %s",
+                    (track_mbid, track_id)
+                )
+                logger.info(f"Updated MBID for {title}: {track_mbid}")
 
-                track_genres = lastfm.get_track_tags(lfm_track_data)
-                # Insert genres if not exists
-                for genre in track_genres:
-                    genre = genre.lower()
-                    try:
-                        # Insert genre if not exists using WHERE NOT EXISTS
-                        database.execute_query("""
-                            INSERT INTO genres (genre)
-                            SELECT %s
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM genres 
-                                WHERE LOWER(genre) = LOWER(%s)
-                            )
-                        """, (genre, genre))
+        # Process track genres (always, regardless of MBID status)
+        track_genres = lastfm.get_track_tags(lfm_track_data)
+        for genre in track_genres:
+            genre = genre.lower()
+            try:
+                # Insert genre if not exists using WHERE NOT EXISTS
+                database.execute_query("""
+                    INSERT INTO genres (genre)
+                    SELECT %s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM genres
+                        WHERE LOWER(genre) = LOWER(%s)
+                    )
+                """, (genre, genre))
 
-                        # Get genre ID
-                        genre_id = database.execute_select_query(
-                            "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)",
-                            (genre,)
-                        )[0][0]
+                # Get genre ID
+                genre_id = database.execute_select_query(
+                    "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)",
+                    (genre,)
+                )[0][0]
 
-                        # Insert genre relationship if not exists
-                        database.execute_query("""
-                            INSERT INTO track_genres (track_id, genre_id)
-                            SELECT %s, %s
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM track_genres
-                                WHERE track_id = %s AND genre_id = %s
-                            )
-                        """, (db_track_data[0], genre_id, db_track_data[0], genre_id))
+                # Insert genre relationship if not exists
+                database.execute_query("""
+                    INSERT INTO track_genres (track_id, genre_id)
+                    SELECT %s, %s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM track_genres
+                        WHERE track_id = %s AND genre_id = %s
+                    )
+                """, (track_id, genre_id, track_id, genre_id))
 
-                        logger.info(f"Processed genre for {db_track_data[2]}: {genre}")
-                    except Exception as e:
-                        logger.error(f"Error processing genre {genre} for {db_track_data[2]}: {e}")
+                logger.debug(f"Processed genre for {title}: {genre}")
+            except Exception as e:
+                logger.error(f"Error processing genre {genre} for {title}: {e}")
+
+        return True
+
     except Exception as e:
-        logger.error(f"Error processing track {db_track_data[2]}: {e}")
+        logger.error(f"Error processing track {title}: {e}")
+        return False
+
+
+def process_lastfm_track_data(
+    database: Database,
+    rate_limit_delay: float = 0.25,
+    limit: Optional[int] = None,
+    skip_with_genres: bool = True,
+) -> dict:
+    """
+    Fetch track-level data from Last.fm API for all tracks.
+
+    This is Phase 6 in the pipeline - gets track MBIDs and track-specific genres
+    which may differ from artist-level genres.
+
+    Uses existing MBID (from ffprobe/Phase 4) for precise lookup when available,
+    falls back to artist+track lookup otherwise.
+
+    Args:
+        database: Database connection object
+        rate_limit_delay: Seconds between API calls. Default 0.25 (4 req/s).
+            Last.fm allows ~5 req/s averaged over 5 minutes.
+        limit: Optional limit on number of tracks to process (for testing)
+        skip_with_genres: If True, skip tracks that already have genres in track_genres
+
+    Returns:
+        dict with stats: {'total': int, 'processed': int, 'updated': int, 'skipped': int, 'failed': int}
+    """
+    logger.info("Starting Last.fm track data enrichment (Phase 6)")
+    logger.info(f"Rate limit delay: {rate_limit_delay}s ({1/rate_limit_delay:.1f} req/s)")
+
+    stats = {
+        'total': 0,
+        'processed': 0,
+        'updated': 0,
+        'skipped': 0,
+        'failed': 0,
+    }
+
+    database.connect()
+
+    # Build query - always include MBID for precise lookup when available
+    if skip_with_genres:
+        # Skip tracks that already have genre associations
+        query = """
+            SELECT td.id, a.artist, td.title, td.musicbrainz_id
+            FROM track_data td
+            INNER JOIN artists a ON td.artist_id = a.id
+            WHERE td.id NOT IN (SELECT DISTINCT track_id FROM track_genres)
+        """
+    else:
+        query = """
+            SELECT td.id, a.artist, td.title, td.musicbrainz_id
+            FROM track_data td
+            INNER JOIN artists a ON td.artist_id = a.id
+        """
+
+    if limit:
+        query += f" LIMIT {limit}"
+
+    tracks = database.execute_select_query(query)
+    stats['total'] = len(tracks)
+
+    if stats['total'] == 0:
+        logger.info("No tracks found needing Last.fm enrichment")
+        database.close()
+        return stats
+
+    logger.info(f"Found {stats['total']} tracks to process")
+
+    # Estimate time
+    estimated_seconds = stats['total'] * rate_limit_delay
+    estimated_hours = estimated_seconds / 3600
+    logger.info(f"Estimated time: {estimated_hours:.1f} hours at {1/rate_limit_delay:.1f} req/s")
+
+    for i, track_data in enumerate(tracks):
+        track_id, artist, title, existing_mbid = track_data
+
+        # Rate limiting
+        if i > 0:  # Skip delay on first request
+            sleep(rate_limit_delay)
+
+        stats['processed'] += 1
+
+        # Log lookup method
+        lookup_method = "MBID" if existing_mbid else "artist+track"
+        logger.debug(f"[{i+1}/{stats['total']}] {artist} - {title} (via {lookup_method})")
+
+        # Process track (pass full tuple including MBID)
+        success = insert_lastfm_track_data(database, track_data)
+
+        if success:
+            stats['updated'] += 1
+        else:
+            stats['failed'] += 1
+
+        # Progress logging every 100 tracks
+        if (i + 1) % 100 == 0:
+            elapsed_pct = (i + 1) / stats['total'] * 100
+            logger.info(
+                f"Progress: {i + 1}/{stats['total']} ({elapsed_pct:.1f}%), "
+                f"{stats['updated']} updated, {stats['failed']} failed"
+            )
+
+    database.close()
+
+    logger.info(
+        f"Last.fm track enrichment complete: {stats['total']} tracks, "
+        f"{stats['updated']} updated, {stats['failed']} failed"
+    )
+
+    if stats['total'] > 0:
+        success_rate = stats['updated'] / stats['total'] * 100
+        logger.info(f"Success rate: {success_rate:.1f}%")
+
+    return stats
 
 
 def process_bpm_acousticbrainz(database: Database) -> dict:

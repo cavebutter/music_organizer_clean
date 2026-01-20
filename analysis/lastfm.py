@@ -148,27 +148,54 @@ def get_genres_from_db(database: Database):
     return genre_list
 
 
-def get_last_fm_track_data(artist: str, track: str):
-    # NOTE this does not cover cases where an artist records multiple tracks with the same name.
-    # Last.fm API only returns a single artist/track pair.
+def get_last_fm_track_data(
+    artist: str | None = None,
+    track: str | None = None,
+    mbid: str | None = None,
+) -> dict | None:
     """
     Retrieves information about a specific track from the Last.fm API.
 
-    Parameters:
-    artist (str): The name of the artist.
-    track (str): The name of the track.
+    Prefers MBID lookup for precise matching. Falls back to artist+track
+    lookup if MBID is not provided.
+
+    Args:
+        artist: The name of the artist (required if mbid not provided)
+        track: The name of the track (required if mbid not provided)
+        mbid: MusicBrainz ID for precise track lookup (preferred)
 
     Returns:
-    dict: A JSON object containing information about the track if the request is successful, otherwise None.
+        dict: JSON response containing track info, or None on failure
     """
-    url = f'http://ws.audioscrobbler.com/2.0/?method=track.getInfo&api_key={LASTFM_API_KEY}&artist={artist}&track={track}&autocorrect=1&format=json'
+    if mbid:
+        url = (
+            f'http://ws.audioscrobbler.com/2.0/?method=track.getInfo'
+            f'&api_key={LASTFM_API_KEY}&mbid={mbid}&format=json'
+        )
+        lookup_desc = f"MBID {mbid}"
+    elif artist and track:
+        url = (
+            f'http://ws.audioscrobbler.com/2.0/?method=track.getInfo'
+            f'&api_key={LASTFM_API_KEY}&artist={artist}&track={track}'
+            f'&autocorrect=1&format=json'
+        )
+        lookup_desc = f"{artist} - {track}"
+    else:
+        logger.error("get_last_fm_track_data requires either mbid or artist+track")
+        return None
+
     response = requests.get(url)
     if response.status_code == 200:
-        logger.debug(f"last_fm Response: {response.json()}")
-        logger.info(f"Retrieved track info for {artist} - {track}")
-        return response.json()
+        result = response.json()
+        # Check for API error response (e.g., track not found)
+        if 'error' in result:
+            logger.warning(f"Last.fm API error for {lookup_desc}: {result.get('message', 'Unknown error')}")
+            return None
+        logger.debug(f"last_fm Response: {result}")
+        logger.info(f"Retrieved track info for {lookup_desc}")
+        return result
     else:
-        logger.error(f"Failed to retrieve track info for {artist} - {track}")
+        logger.error(f"Failed to retrieve track info for {lookup_desc} (HTTP {response.status_code})")
         return None
 
 

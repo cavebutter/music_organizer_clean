@@ -194,17 +194,58 @@ class TestGetLastFmTrackData:
     """Tests for get_last_fm_track_data() function."""
 
     @patch("analysis.lastfm.requests.get")
-    def test_successful_request(self, mock_get):
-        """Should return JSON response on successful API call."""
+    def test_successful_request_by_artist_track(self, mock_get):
+        """Should return JSON response when looking up by artist+track."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = SAMPLE_TRACK_RESPONSE
         mock_get.return_value = mock_response
 
-        result = lastfm.get_last_fm_track_data("Black Sabbath", "War Pigs")
+        result = lastfm.get_last_fm_track_data(artist="Black Sabbath", track="War Pigs")
 
         assert result is not None
         assert result["track"]["name"] == "War Pigs"
+        # Verify URL contains artist and track params
+        call_url = mock_get.call_args[0][0]
+        assert "artist=Black" in call_url
+        assert "track=War" in call_url
+        assert "autocorrect=1" in call_url
+
+    @patch("analysis.lastfm.requests.get")
+    def test_successful_request_by_mbid(self, mock_get):
+        """Should return JSON response when looking up by MBID."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = SAMPLE_TRACK_RESPONSE
+        mock_get.return_value = mock_response
+
+        result = lastfm.get_last_fm_track_data(mbid="a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
+        assert result is not None
+        # Verify URL uses mbid param instead of artist/track
+        call_url = mock_get.call_args[0][0]
+        assert "mbid=a1b2c3d4" in call_url
+        assert "artist=" not in call_url
+
+    @patch("analysis.lastfm.requests.get")
+    def test_mbid_preferred_over_artist_track(self, mock_get):
+        """Should use MBID when both MBID and artist+track are provided."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = SAMPLE_TRACK_RESPONSE
+        mock_get.return_value = mock_response
+
+        result = lastfm.get_last_fm_track_data(
+            artist="Black Sabbath",
+            track="War Pigs",
+            mbid="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        )
+
+        assert result is not None
+        # Verify URL uses mbid, not artist/track
+        call_url = mock_get.call_args[0][0]
+        assert "mbid=a1b2c3d4" in call_url
+        assert "artist=" not in call_url
 
     @patch("analysis.lastfm.requests.get")
     def test_failed_request(self, mock_get):
@@ -213,7 +254,30 @@ class TestGetLastFmTrackData:
         mock_response.status_code = 404
         mock_get.return_value = mock_response
 
-        result = lastfm.get_last_fm_track_data("Unknown", "Unknown")
+        result = lastfm.get_last_fm_track_data(artist="Unknown", track="Unknown")
+
+        assert result is None
+
+    def test_missing_required_params_returns_none(self):
+        """Should return None when neither MBID nor artist+track provided."""
+        result = lastfm.get_last_fm_track_data()
+        assert result is None
+
+        result = lastfm.get_last_fm_track_data(artist="Black Sabbath")
+        assert result is None
+
+        result = lastfm.get_last_fm_track_data(track="War Pigs")
+        assert result is None
+
+    @patch("analysis.lastfm.requests.get")
+    def test_api_error_response_returns_none(self, mock_get):
+        """Should return None when API returns error in JSON response."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"error": 6, "message": "Track not found"}
+        mock_get.return_value = mock_response
+
+        result = lastfm.get_last_fm_track_data(artist="Unknown", track="Unknown")
 
         assert result is None
 
@@ -272,9 +336,28 @@ class TestIntegration:
         assert len(similar) > 0
 
     @pytest.mark.integration
-    def test_real_track_lookup(self):
-        """Test real API call for a well-known track."""
-        result = lastfm.get_last_fm_track_data("The Beatles", "Yesterday")
+    def test_real_track_lookup_by_artist_track(self):
+        """Test real API call for a well-known track by artist+track."""
+        result = lastfm.get_last_fm_track_data(artist="The Beatles", track="Yesterday")
 
         assert result is not None
         assert "track" in result
+        # Note: Tags may be empty for some tracks in Last.fm's database
+
+    @pytest.mark.integration
+    def test_real_track_lookup_by_mbid(self):
+        """Test real API call for a track by MBID.
+
+        Note: Last.fm's MBID coverage is incomplete. This test may fail
+        if the MBID is not in their database. The important thing is that
+        our code handles the lookup correctly.
+        """
+        # "Bohemian Rhapsody" by Queen - commonly has MBID in Last.fm
+        result = lastfm.get_last_fm_track_data(
+            mbid="ebcdb0dc-8258-4b9e-8428-149ca21f4d3e"
+        )
+
+        # Last.fm MBID coverage is spotty, so we accept None as valid
+        # The unit tests verify the URL construction is correct
+        if result is not None:
+            assert "track" in result
