@@ -145,11 +145,13 @@ def populate_artist_id_column(database: Database):
 
 
 def get_last_update_date(database: Database):
+    """Get the date of the last pipeline run from history table."""
     database.connect()
-    query = "SELECT MAX(date) FROM history"
+    query = "SELECT MAX(tx_date) FROM history"
     result = database.execute_select_query(query)
-    result = result[0][0]
-    return result
+    if result and result[0][0]:
+        return result[0][0]
+    return None
 
 
 def get_latest_added_date(database: Database):

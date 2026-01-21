@@ -81,6 +81,28 @@ def get_all_tracks_limit(music_library, limit=50):
         sys.exit()
 
 
+def get_tracks_since_date(music_library, since_date: str):
+    """
+    Retrieve tracks added to the library since a specific date.
+
+    Args:
+        music_library: Plex library object
+        since_date: Date string in 'YYYY-MM-DD' format
+
+    Returns:
+        tuple: (list of track objects, count)
+    """
+    try:
+        # Plex uses addedAt filter with format 'YYYY-MM-DD'
+        tracks = music_library.searchTracks(filters={"addedAt>>": since_date})
+        library_size = len(tracks)
+        logger.info(f"Retrieved {library_size} tracks added since {since_date}")
+        return tracks, library_size
+    except Exception as e:
+        logger.error(f"Error retrieving tracks since {since_date}: {e}")
+        return [], 0
+
+
 def extract_track_data(track, filepath_prefix: str):
     """
     Extract Plex track data from a track object. Return a dict with selected data

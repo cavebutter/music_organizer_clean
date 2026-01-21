@@ -831,6 +831,82 @@ class TestEssentiaBpmEnrichment:
         assert True
 
 
+@pytest.fixture(scope="module")
+def finalized_sandbox(essentia_bpm_sandbox):
+    """
+    Phase 8: Finalization - record import in history table.
+
+    This is the final step of the pipeline, recording the import
+    for future incremental updates.
+    """
+    db, acousticbrainz_stats, essentia_stats = essentia_bpm_sandbox
+
+    # Get the track count for history
+    db.connect()
+    track_count = db.execute_select_query("SELECT COUNT(*) FROM track_data")[0][0]
+    db.close()
+
+    # Record import in history table
+    dbf.update_history(db, track_count)
+
+    return db, track_count
+
+
+class TestHistoryIntegration:
+    """Tests for Phase 8: History tracking."""
+
+    def test_history_record_created(self, finalized_sandbox):
+        """Should create a history record after pipeline completion."""
+        db, track_count = finalized_sandbox
+
+        db.connect()
+        result = db.execute_select_query("SELECT COUNT(*) FROM history")
+        db.close()
+
+        assert result[0][0] > 0, "No history record was created"
+
+    def test_history_record_has_correct_count(self, finalized_sandbox):
+        """History record should have correct track count."""
+        db, track_count = finalized_sandbox
+
+        db.connect()
+        result = db.execute_select_query(
+            "SELECT records FROM history ORDER BY id DESC LIMIT 1"
+        )
+        db.close()
+
+        assert result[0][0] == track_count, (
+            f"History records ({result[0][0]}) doesn't match track count ({track_count})"
+        )
+
+    def test_history_has_latest_entry_date(self, finalized_sandbox):
+        """History should record the latest track added_date."""
+        db, _ = finalized_sandbox
+
+        db.connect()
+        history_latest = db.execute_select_query(
+            "SELECT latest_entry FROM history ORDER BY id DESC LIMIT 1"
+        )[0][0]
+        track_latest = db.execute_select_query(
+            "SELECT MAX(added_date) FROM track_data"
+        )[0][0]
+        db.close()
+
+        # Convert to comparable format if needed
+        assert history_latest is not None, "History latest_entry is NULL"
+        print(f"\nHistory latest_entry: {history_latest}")
+        print(f"Track max added_date: {track_latest}")
+
+    def test_get_last_update_date(self, finalized_sandbox):
+        """Should be able to retrieve last update date for incremental updates."""
+        db, _ = finalized_sandbox
+
+        last_update = dbf.get_last_update_date(db)
+
+        assert last_update is not None, "get_last_update_date returned None"
+        print(f"\nLast update date: {last_update}")
+
+
 class TestFullPipelineIntegrity:
     """Integration tests for the complete pipeline."""
 
@@ -874,9 +950,9 @@ class TestFullPipelineIntegrity:
 
         assert len(duplicates) == 0, f"Found duplicate plex_ids: {duplicates}"
 
-    def test_data_summary(self, essentia_bpm_sandbox, capsys):
+    def test_data_summary(self, finalized_sandbox, capsys):
         """Print comprehensive summary of pipeline results for review."""
-        db, acousticbrainz_stats, essentia_stats = essentia_bpm_sandbox
+        db, _ = finalized_sandbox
         db.connect()
 
         # Core counts
@@ -927,14 +1003,27 @@ class TestFullPipelineIntegrity:
         print(
             f"  Tracks with BPM:     {tracks_with_bpm}/{track_count} ({tracks_with_bpm / track_count * 100:.1f}%)"
         )
-        print(f"  AcousticBrainz:      {acousticbrainz_stats.get('updated', 0)} tracks")
-        print(f"  Essentia:            {essentia_stats.get('updated', 0)} tracks")
 
         print(f"\n{'GENRE RELATIONSHIPS':^60}")
         print("-" * 60)
         print(f"  Artist-genre links:  {artist_genre_count}")
         print(f"  Track-genre links:   {track_genre_count}")
         print(f"  Similar artists:     {similar_artist_count}")
+
+        # History info
+        db.connect()
+        history = db.execute_select_query(
+            "SELECT tx_date, records, latest_entry FROM history ORDER BY id DESC LIMIT 1"
+        )
+        db.close()
+
+        if history:
+            tx_date, records, latest_entry = history[0]
+            print(f"\n{'HISTORY':^60}")
+            print("-" * 60)
+            print(f"  Last import date:    {tx_date}")
+            print(f"  Records imported:    {records}")
+            print(f"  Latest track date:   {latest_entry}")
 
         print("\n" + "=" * 60)
 

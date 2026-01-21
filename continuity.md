@@ -20,12 +20,36 @@
   - `test/test_e2e_pipeline.py`: Fixed unused loop variable `album` → `_album`
 - All ruff checks now pass
 
-#### Next Steps (In Progress)
+### History Integration (Phase 8)
+- Added `finalized_sandbox` fixture to e2e pipeline that calls `update_history()`
+- New test class `TestHistoryIntegration` with 4 tests:
+  - `test_history_record_created` - verifies history record exists
+  - `test_history_record_has_correct_count` - verifies track count matches
+  - `test_history_has_latest_entry_date` - verifies latest_entry populated
+  - `test_get_last_update_date` - verifies function returns valid date
+- Updated `test_data_summary` to include history information in output
+- Updated `.claude/revised_flow.md` to mark Phase 8.1 as integrated
+
+### Incremental Updates and Orchestration (Phase 9)
+- Created new `pipeline.py` module with orchestration functions:
+  - `validate_environment()` - validates DB, paths, ffprobe before running
+  - `run_full_pipeline()` - complete pipeline from Plex extraction to BPM
+  - `run_incremental_update()` - processes only new tracks since last update
+  - `insert_new_tracks()` - helper that avoids duplicates by plex_id
+  - `add_new_artists()` - adds artists from new tracks to artists table
+- Added `get_tracks_since_date()` to `plex/plex_library.py` for Plex filtering
+- Created `test/test_incremental_update.py` with tests for new functionality
+- Updated `.claude/revised_flow.md` to mark all phases as implemented
+
+#### Completed Tasks
 1. ~~Dead code cleanup~~ ✓
 2. ~~Ruff linting~~ ✓
-3. History integration into pipeline
-4. Implement incremental updates
-5. Create orchestration functions
+3. ~~History integration into pipeline~~ ✓
+4. ~~Implement incremental updates~~ ✓
+5. ~~Create orchestration functions~~ ✓
+
+#### Remaining Work (Low Priority)
+- Discogs integration (Phase 5.6) - additional genre source, not critical
 
 ---
 
