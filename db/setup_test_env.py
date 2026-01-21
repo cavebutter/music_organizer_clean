@@ -3,10 +3,11 @@ Reset the sandbox (test) database by truncating all tables.
 
 Preserves table schema but removes all data for a fresh test run.
 """
-from db import DB_PATH, DB_USER, DB_PASSWORD, TEST_DB
-from db.database import Database
+
 from loguru import logger
 
+from db import DB_PASSWORD, DB_PATH, DB_USER, TEST_DB
+from db.database import Database
 
 # Tables to truncate, in order (respects foreign key constraints)
 TABLES_TO_TRUNCATE = [
@@ -51,7 +52,7 @@ def truncate_all_tables(database: Database) -> int:
     return truncated
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print(f"Resetting sandbox database: {TEST_DB}")
 
     db = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB)

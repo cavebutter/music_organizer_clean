@@ -4,10 +4,11 @@ Tests the Last.fm API integration functions using mocked responses
 to avoid actual API calls during testing.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
-from analysis import lastfm
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from analysis import lastfm
 
 # Sample API responses for mocking
 SAMPLE_ARTIST_RESPONSE = {
@@ -236,9 +237,7 @@ class TestGetLastFmTrackData:
         mock_get.return_value = mock_response
 
         result = lastfm.get_last_fm_track_data(
-            artist="Black Sabbath",
-            track="War Pigs",
-            mbid="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            artist="Black Sabbath", track="War Pigs", mbid="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         )
 
         assert result is not None
@@ -353,9 +352,7 @@ class TestIntegration:
         our code handles the lookup correctly.
         """
         # "Bohemian Rhapsody" by Queen - commonly has MBID in Last.fm
-        result = lastfm.get_last_fm_track_data(
-            mbid="ebcdb0dc-8258-4b9e-8428-149ca21f4d3e"
-        )
+        result = lastfm.get_last_fm_track_data(mbid="ebcdb0dc-8258-4b9e-8428-149ca21f4d3e")
 
         # Last.fm MBID coverage is spotty, so we accept None as valid
         # The unit tests verify the URL construction is correct

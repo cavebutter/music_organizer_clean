@@ -12,26 +12,27 @@ Logging:
     Uses crash-resilient logging (fsync after every write) to ensure logs
     survive system crashes during CPU-intensive operations like BPM analysis.
 """
+
 import os
 from datetime import datetime
 
 import pytest
-from config.logging import setup_logging
-from db import DB_PATH, DB_USER, DB_PASSWORD, TEST_DB, DB_DATABASE
-from db.database import Database
-from plex import (
-    PLEX_USER,
-    PLEX_PASSWORD,
-    PLEX_SERVER_NAME,
-    PLEX_TEST_SERVER_NAME,
-    PLEX_TEST_LIBRARY,
-    PLEX_MUSIC_LIBRARY,
-)
 from plexapi.myplex import MyPlexAccount
 
+from config.logging import setup_logging
+from db import DB_DATABASE, DB_PASSWORD, DB_PATH, DB_USER, TEST_DB
+from db.database import Database
+from plex import (
+    PLEX_MUSIC_LIBRARY,
+    PLEX_PASSWORD,
+    PLEX_SERVER_NAME,
+    PLEX_TEST_LIBRARY,
+    PLEX_TEST_SERVER_NAME,
+    PLEX_USER,
+)
 
 # File type constants for test assertions
-SUPPORTED_AUDIO_EXTENSIONS = {'.flac', '.mp3', '.m4a'}
+SUPPORTED_AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a"}
 
 # Ensure logs directory exists
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")

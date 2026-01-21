@@ -1,11 +1,10 @@
-from os import WCONTINUED
-
-from . import DB_PATH, DB_USER, DB_PASSWORD, DB_DATABASE, TEST_DB, DB_PORT
-from .database import Database
 import csv
-import os
-from loguru import logger
 import datetime
+
+from loguru import logger
+
+from . import DB_PASSWORD, DB_PATH, DB_USER, TEST_DB
+from .database import Database
 
 # database = Database(DB_PATH, DB_USER, DB_PASSWORD, DB_DATABASE)
 database = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB)
@@ -17,19 +16,27 @@ def insert_tracks(database: Database, csv_file):
     INSERT INTO track_data (title, artist, album, genre, added_date, filepath, location, plex_id)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
-    with open(csv_file, 'r') as f:
+    with open(csv_file) as f:
         reader = csv.DictReader(f)
         for row in reader:
             try:
-                values = (row['title'], row['artist'], row['album'], row['genre'],
-                                              row['added_date'], row['filepath'], row['location'],
-                                              row['plex_id']) # TODO : make this dynamic
+                values = (
+                    row["title"],
+                    row["artist"],
+                    row["album"],
+                    row["genre"],
+                    row["added_date"],
+                    row["filepath"],
+                    row["location"],
+                    row["plex_id"],
+                )  # TODO : make this dynamic
                 database.execute_query(query, values)
                 logger.info(f"Inserted track record for {row['plex_id']}")
             except Exception as e:
                 logger.error(f"Error inserting track record: {e}")
                 logger.debug(e)
                 continue
+
 
 def get_id_location(database: Database, cutoff=None):
     """
@@ -51,7 +58,7 @@ def get_id_location(database: Database, cutoff=None):
     else:
         try:
             # Convert cutoff from 'mmddyyyy' to 'yyyy-mm-dd'
-            cutoff_date = datetime.datetime.strptime(cutoff, '%m%d%Y').strftime('%Y-%m-%d')
+            cutoff_date = datetime.datetime.strptime(cutoff, "%m%d%Y").strftime("%Y-%m-%d")
             results = database.execute_select_query(query_w_cutoff, (cutoff_date,))
             logger.info("Queried db with cutoff")
         except ValueError:
@@ -60,16 +67,16 @@ def get_id_location(database: Database, cutoff=None):
     return results
 
 
-def export_results(results: list, file_path: str = 'output/id_location.csv'):
+def export_results(results: list, file_path: str = "output/id_location.csv"):
     """
     Export the results of a query to a CSV file. 'results' is a list of tuples.
     :param results: List of tuples containing the data to be written to CSV
     :param file_path: Path to the CSV file
     :return: None
     """
-    with open(file_path, 'w', newline='') as f:
+    with open(file_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(['id', 'plex_id', 'location'])
+        writer.writerow(["id", "plex_id", "location"])
         writer.writerows(results)
     logger.info(f"id_location results exported to {file_path}")
     return None
@@ -88,7 +95,9 @@ def populate_artists_table(database: Database):
     artists = database.execute_select_query(query)
     for artist in artists:
         database.execute_query("INSERT INTO artists (artist) VALUES (%s)", (artist[0],))
-        logger.info(f"Inserted {artist[0]} into artists table; {artists.index(artist) + 1} of {len(artists)}")
+        logger.info(
+            f"Inserted {artist[0]} into artists table; {artists.index(artist) + 1} of {len(artists)}"
+        )
     logger.debug("Populated artists table")
 
 
@@ -122,14 +131,16 @@ def populate_artist_id_column(database: Database):
     SELECT id, artist
     FROM artists
     """
-    artists = database.execute_select_query(query) # fetchall()
+    artists = database.execute_select_query(query)  # fetchall()
     logger.debug("Queried DB for id and artist")
     update_query = "UPDATE track_data SET artist_id = %s WHERE artist = %s"
 
     for artist in artists:
         params = (artist[0], artist[1])
         database.execute_query(update_query, params)
-        logger.info(f"Updated {artist[1]} in track_data table; {artists.index(artist) + 1} of {len(artists)}")
+        logger.info(
+            f"Updated {artist[1]} in track_data table; {artists.index(artist) + 1} of {len(artists)}"
+        )
     logger.debug("Updated artist_id column in track_data table")
 
 
@@ -149,7 +160,6 @@ def get_latest_added_date(database: Database):
     return result
 
 
-
 def update_history(database: Database, import_size: int):
     """
     Update the history table with the date of the last update, the number of records added, and the date of the last library update.
@@ -161,7 +171,7 @@ def update_history(database: Database, import_size: int):
     """
     database.connect()
     max_date = get_latest_added_date(database)
-    today = datetime.datetime.now().strftime('%Y-%m-%d')
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
     query = """
     INSERT INTO history (tx_date, records, latest_entry) VALUES (%s, %s, %s)
     """

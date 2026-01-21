@@ -6,29 +6,30 @@ Uses the test Plex library and sandbox database.
 
 Run with: pytest test/test_e2e_pipeline.py -v -s
 """
+
 import os
 import tempfile
+
 import pytest
-from db import DB_PATH, DB_USER, DB_PASSWORD, TEST_DB
-from db.database import Database
-from db.setup_test_env import truncate_all_tables
+
 import db.db_functions as dbf
 import db.db_update as dbu
-from plex import PLEX_TEST_LIBRARY
-from plex.plex_library import (
-    plex_connect,
-    get_music_library,
-    get_all_tracks,
-    listify_track_data,
-    export_track_data,
-)
 from analysis.ffmpeg import (
     check_ffprobe_available,
-    validate_path_mapping,
     map_plex_path_to_local,
-    verify_path_accessible,
-    process_mbid_from_files,
     process_artist_mbid_from_files,
+    process_mbid_from_files,
+    validate_path_mapping,
+    verify_path_accessible,
+)
+from db import DB_PASSWORD, DB_PATH, DB_USER, TEST_DB
+from db.database import Database
+from db.setup_test_env import truncate_all_tables
+from plex import PLEX_TEST_LIBRARY
+from plex.plex_library import (
+    export_track_data,
+    get_all_tracks,
+    listify_track_data,
 )
 
 
@@ -63,18 +64,18 @@ class TestEnvironmentValidation:
         """Test path mapping should be configured in .env."""
         result = validate_path_mapping(use_test=True)
 
-        assert result['configured'] is True, f"Test path mapping not configured: {result['errors']}"
-        assert result['plex_prefix'] != '', "MUSIC_PATH_PREFIX_PLEX_TEST not set"
-        assert result['local_prefix'] != '', "MUSIC_PATH_PREFIX_LOCAL_TEST not set"
+        assert result["configured"] is True, f"Test path mapping not configured: {result['errors']}"
+        assert result["plex_prefix"] != "", "MUSIC_PATH_PREFIX_PLEX_TEST not set"
+        assert result["local_prefix"] != "", "MUSIC_PATH_PREFIX_LOCAL_TEST not set"
 
     def test_path_mapping_accessible_test(self):
         """Test music path should be accessible (CIFS mount)."""
         result = validate_path_mapping(use_test=True)
 
-        if not result['configured']:
+        if not result["configured"]:
             pytest.skip("Test path mapping not configured")
 
-        assert result['accessible'] is True, (
+        assert result["accessible"] is True, (
             f"Test path not accessible: {result['local_prefix']} - "
             f"is the CIFS mount available? Errors: {result['errors']}"
         )
@@ -83,10 +84,10 @@ class TestEnvironmentValidation:
         """Should find and read at least one audio file in test path."""
         result = validate_path_mapping(use_test=True)
 
-        if not result['accessible']:
+        if not result["accessible"]:
             pytest.skip("Test path not accessible")
 
-        assert result['sample_file_ok'] is True, (
+        assert result["sample_file_ok"] is True, (
             f"No readable audio files found in {result['local_prefix']}"
         )
 
@@ -104,7 +105,7 @@ class TestEnvironmentValidation:
         local_path = map_plex_path_to_local(plex_path, use_test=True)
 
         assert local_path is not None, f"Failed to map path: {plex_path}"
-        assert local_path.startswith('/mnt/'), f"Mapped path should start with /mnt/: {local_path}"
+        assert local_path.startswith("/mnt/"), f"Mapped path should start with /mnt/: {local_path}"
 
     def test_mapped_file_accessible(self, db_test):
         """Mapped file path should be accessible on local filesystem."""
@@ -122,34 +123,31 @@ class TestEnvironmentValidation:
         if local_path is None:
             pytest.skip(f"Could not map path: {plex_path}")
 
-        assert verify_path_accessible(local_path), (
-            f"Mapped file not accessible: {local_path}"
-        )
+        assert verify_path_accessible(local_path), f"Mapped file not accessible: {local_path}"
 
     def test_path_mapping_configured_prod(self):
         """Production path mapping should be configured in .env."""
         result = validate_path_mapping(use_test=False)
 
-        assert result['configured'] is True, f"Prod path mapping not configured: {result['errors']}"
-        assert result['plex_prefix'] != '', "MUSIC_PATH_PREFIX_PLEX not set"
-        assert result['local_prefix'] != '', "MUSIC_PATH_PREFIX_LOCAL not set"
+        assert result["configured"] is True, f"Prod path mapping not configured: {result['errors']}"
+        assert result["plex_prefix"] != "", "MUSIC_PATH_PREFIX_PLEX not set"
+        assert result["local_prefix"] != "", "MUSIC_PATH_PREFIX_LOCAL not set"
 
     @pytest.mark.skipif(
-        not os.path.isdir('/mnt/unraid/slsk/music'),
-        reason="Production NFS mount not available"
+        not os.path.isdir("/mnt/unraid/slsk/music"), reason="Production NFS mount not available"
     )
     def test_path_mapping_accessible_prod(self):
         """Production music path should be accessible (NFS mount)."""
         result = validate_path_mapping(use_test=False)
 
-        if not result['configured']:
+        if not result["configured"]:
             pytest.skip("Production path mapping not configured")
 
         # This may fail if NFS mount isn't available - that's OK
-        if not result['accessible']:
+        if not result["accessible"]:
             pytest.skip(f"Production NFS mount not available: {result['local_prefix']}")
 
-        assert result['accessible'] is True
+        assert result["accessible"] is True
 
 
 class TestPlexExtraction:
@@ -169,8 +167,16 @@ class TestPlexExtraction:
         track_data = listify_track_data(tracks[:1], filepath_prefix="")
 
         assert len(track_data) == 1
-        required_fields = ['title', 'artist', 'album', 'genre', 'added_date',
-                          'filepath', 'location', 'plex_id']
+        required_fields = [
+            "title",
+            "artist",
+            "album",
+            "genre",
+            "added_date",
+            "filepath",
+            "location",
+            "plex_id",
+        ]
         for field in required_fields:
             assert field in track_data[0], f"Missing field: {field}"
 
@@ -179,7 +185,7 @@ class TestPlexExtraction:
         tracks, _ = get_all_tracks(test_library)
         track_data = listify_track_data(tracks[:5], filepath_prefix="")
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             csv_path = f.name
 
         try:
@@ -218,7 +224,7 @@ def populated_sandbox(fresh_sandbox, plex_test_server, test_library):
     # Export to temp CSV
     track_data = listify_track_data(tracks, filepath_prefix="")
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         csv_path = f.name
 
     try:
@@ -302,11 +308,14 @@ class TestDatabaseLoad:
         db.close()
 
         if len(result) == 0:
-            pytest.skip("Compilation album 'No Thanks! The '70s Punk Rebellion' not in test library")
+            pytest.skip(
+                "Compilation album 'No Thanks! The '70s Punk Rebellion' not in test library"
+            )
 
         # None of the tracks should have "Various Artists" as the artist
         various_artists_tracks = [
-            (title, artist) for title, artist, album in result
+            (title, artist)
+            for title, artist, album in result
             if artist.lower() == "various artists"
         ]
 
@@ -317,7 +326,7 @@ class TestDatabaseLoad:
 
         # Log some sample artists for verification
         print(f"\nCompilation album tracks ({len(result)} total):")
-        for title, artist, album in result[:5]:
+        for title, artist, _album in result[:5]:
             print(f"  - '{title}' by {artist}")
 
 
@@ -390,48 +399,47 @@ class TestFFprobeMBIDExtraction:
         db, track_stats, artist_stats = mbid_enriched_sandbox
 
         assert isinstance(track_stats, dict)
-        assert 'total' in track_stats
-        assert 'accessible' in track_stats
-        assert 'extracted' in track_stats
-        assert 'updated' in track_stats
-        assert 'skipped' in track_stats
+        assert "total" in track_stats
+        assert "accessible" in track_stats
+        assert "extracted" in track_stats
+        assert "updated" in track_stats
+        assert "skipped" in track_stats
 
     def test_artist_mbid_stats_returned(self, mbid_enriched_sandbox):
         """Should return stats dict with expected keys."""
         db, track_stats, artist_stats = mbid_enriched_sandbox
 
         assert isinstance(artist_stats, dict)
-        assert 'total' in artist_stats
-        assert 'extracted' in artist_stats
-        assert 'updated' in artist_stats
-        assert 'skipped' in artist_stats
+        assert "total" in artist_stats
+        assert "extracted" in artist_stats
+        assert "updated" in artist_stats
+        assert "skipped" in artist_stats
 
     def test_files_were_accessible(self, mbid_enriched_sandbox):
         """At least some files should be accessible for extraction."""
         db, track_stats, artist_stats = mbid_enriched_sandbox
 
-        if track_stats.get('skipped'):
+        if track_stats.get("skipped"):
             pytest.skip("MBID extraction was skipped (environment not configured)")
 
         # If not skipped, we should have accessed some files
-        assert track_stats['accessible'] > 0, (
-            f"No files were accessible. Stats: {track_stats}"
-        )
+        assert track_stats["accessible"] > 0, f"No files were accessible. Stats: {track_stats}"
 
     def test_mbids_extracted_from_files(self, mbid_enriched_sandbox):
         """Should extract MBIDs from tagged files."""
         db, track_stats, artist_stats = mbid_enriched_sandbox
 
-        if track_stats.get('skipped'):
+        if track_stats.get("skipped"):
             pytest.skip("MBID extraction was skipped")
 
         # We expect at least some files to have MBIDs if they're Picard-tagged
         # This may be 0 for untagged libraries, which is OK
-        assert track_stats['extracted'] >= 0
+        assert track_stats["extracted"] >= 0
 
     def test_mbid_values_are_valid_uuids(self, mbid_enriched_sandbox):
         """Extracted MBIDs should be valid UUID format."""
         import re
+
         db, track_stats, artist_stats = mbid_enriched_sandbox
 
         db.connect()
@@ -443,8 +451,7 @@ class TestFFprobeMBIDExtraction:
         db.close()
 
         uuid_pattern = re.compile(
-            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-            re.IGNORECASE
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
         )
 
         for (mbid,) in result:
@@ -454,7 +461,7 @@ class TestFFprobeMBIDExtraction:
         """MBID coverage should be tracked in stats."""
         db, track_stats, artist_stats = mbid_enriched_sandbox
 
-        if track_stats.get('skipped'):
+        if track_stats.get("skipped"):
             pytest.skip("MBID extraction was skipped")
 
         # Log the coverage for visibility
@@ -466,7 +473,9 @@ class TestFFprobeMBIDExtraction:
         db.close()
 
         coverage_pct = (with_mbid / total * 100) if total > 0 else 0
-        print(f"\nMBID coverage after ffprobe extraction: {with_mbid}/{total} ({coverage_pct:.1f}%)")
+        print(
+            f"\nMBID coverage after ffprobe extraction: {with_mbid}/{total} ({coverage_pct:.1f}%)"
+        )
         print(f"Track stats: {track_stats}")
         print(f"Artist stats: {artist_stats}")
 
@@ -607,9 +616,9 @@ class TestLastFmTrackEnrichment:
         db, stats = lastfm_track_enriched_sandbox
 
         assert isinstance(stats, dict)
-        assert 'total' in stats
-        assert 'updated' in stats
-        assert 'failed' in stats
+        assert "total" in stats
+        assert "updated" in stats
+        assert "failed" in stats
 
         print(f"\nPhase 6 stats: {stats}")
 
@@ -637,7 +646,9 @@ class TestLastFmTrackEnrichment:
         db.close()
 
         coverage_pct = (tracks_with_mbid / total_tracks * 100) if total_tracks > 0 else 0
-        print(f"\nTrack MBID coverage after Phase 6: {tracks_with_mbid}/{total_tracks} ({coverage_pct:.1f}%)")
+        print(
+            f"\nTrack MBID coverage after Phase 6: {tracks_with_mbid}/{total_tracks} ({coverage_pct:.1f}%)"
+        )
 
         # Track MBID coverage should be meaningful
         assert tracks_with_mbid >= 0  # May be 0 if Last.fm doesn't return MBIDs
@@ -755,17 +766,17 @@ class TestEssentiaBpmEnrichment:
         db, _, essentia_stats = essentia_bpm_sandbox
 
         assert isinstance(essentia_stats, dict)
-        assert 'total' in essentia_stats
-        assert 'accessible' in essentia_stats
-        assert 'analyzed' in essentia_stats
-        assert 'updated' in essentia_stats
-        assert 'skipped' in essentia_stats
+        assert "total" in essentia_stats
+        assert "accessible" in essentia_stats
+        assert "analyzed" in essentia_stats
+        assert "updated" in essentia_stats
+        assert "skipped" in essentia_stats
 
     def test_essentia_processed_remaining_tracks(self, essentia_bpm_sandbox):
         """Essentia should process tracks that AcousticBrainz missed."""
         db, acousticbrainz_stats, essentia_stats = essentia_bpm_sandbox
 
-        if essentia_stats.get('skipped'):
+        if essentia_stats.get("skipped"):
             pytest.skip("Essentia BPM analysis was skipped (environment not configured)")
 
         # Log what happened for visibility
@@ -773,15 +784,15 @@ class TestEssentiaBpmEnrichment:
         print(f"Essentia stats: {essentia_stats}")
 
         # If AcousticBrainz had misses and Essentia ran, we should have analyzed some
-        if acousticbrainz_stats.get('misses', 0) > 0:
+        if acousticbrainz_stats.get("misses", 0) > 0:
             # Not all tracks may be accessible, but we should have tried
-            assert essentia_stats['total'] >= 0
+            assert essentia_stats["total"] >= 0
 
     def test_essentia_bpm_values_valid(self, essentia_bpm_sandbox):
         """Essentia-analyzed BPM values should be in valid range."""
         db, _, essentia_stats = essentia_bpm_sandbox
 
-        if essentia_stats.get('skipped') or essentia_stats.get('analyzed', 0) == 0:
+        if essentia_stats.get("skipped") or essentia_stats.get("analyzed", 0) == 0:
             pytest.skip("No tracks were analyzed by Essentia")
 
         db.connect()
@@ -904,12 +915,18 @@ class TestFullPipelineIntegrity:
 
         print(f"\n{'MBID COVERAGE':^60}")
         print("-" * 60)
-        print(f"  Tracks with MBID:    {tracks_with_mbid}/{track_count} ({tracks_with_mbid/track_count*100:.1f}%)")
-        print(f"  Artists with MBID:   {artists_with_mbid}/{artist_count} ({artists_with_mbid/artist_count*100:.1f}%)")
+        print(
+            f"  Tracks with MBID:    {tracks_with_mbid}/{track_count} ({tracks_with_mbid / track_count * 100:.1f}%)"
+        )
+        print(
+            f"  Artists with MBID:   {artists_with_mbid}/{artist_count} ({artists_with_mbid / artist_count * 100:.1f}%)"
+        )
 
         print(f"\n{'BPM COVERAGE':^60}")
         print("-" * 60)
-        print(f"  Tracks with BPM:     {tracks_with_bpm}/{track_count} ({tracks_with_bpm/track_count*100:.1f}%)")
+        print(
+            f"  Tracks with BPM:     {tracks_with_bpm}/{track_count} ({tracks_with_bpm / track_count * 100:.1f}%)"
+        )
         print(f"  AcousticBrainz:      {acousticbrainz_stats.get('updated', 0)} tracks")
         print(f"  Essentia:            {essentia_stats.get('updated', 0)} tracks")
 

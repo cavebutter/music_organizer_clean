@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,11 +11,4 @@ DB_DATABASE = os.getenv("MYSQL_DATABASE", "music_organizer")
 TEST_DB = os.getenv("MYSQL_TEST_DATABASE", "sandbox")
 DB_PORT = os.getenv("MYSQL_PORT", "3306")
 
-__all__ = [
-    'DB_PATH',
-    'DB_USER',
-    'DB_PASSWORD',
-    'DB_DATABASE',
-    'TEST_DB',
-    'DB_PORT'
-]
+__all__ = ["DB_PATH", "DB_USER", "DB_PASSWORD", "DB_DATABASE", "TEST_DB", "DB_PORT"]

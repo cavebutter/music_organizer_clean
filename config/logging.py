@@ -12,25 +12,19 @@ Or for module-level logging with context:
 For crash-resilient logging (flushes after every message):
     setup_logging("logs/my_script.log", crash_resilient=True)
 """
+
 import os
 import sys
+
 from loguru import logger
 
 # Default format with module, function, and line number for tracing
 DEFAULT_FORMAT = (
-    "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
-    "{level: <8} | "
-    "{module}:{function}:{line} | "
-    "{message}"
+    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {module}:{function}:{line} | {message}"
 )
 
 # Compact format for console output
-CONSOLE_FORMAT = (
-    "{time:HH:mm:ss} | "
-    "{level: <8} | "
-    "{module}:{function}:{line} | "
-    "{message}"
-)
+CONSOLE_FORMAT = "{time:HH:mm:ss} | {level: <8} | {module}:{function}:{line} | {message}"
 
 
 class FlushingFileSink:
@@ -45,7 +39,7 @@ class FlushingFileSink:
         self.filepath = filepath
         # Ensure log directory exists
         os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
-        self._file = open(filepath, "a", encoding="utf-8")
+        self._file = open(filepath, "a", encoding="utf-8")  # noqa: SIM115
 
     def write(self, message: str):
         self._file.write(message)
@@ -92,12 +86,7 @@ def setup_logging(
 
     # Console output
     if console:
-        logger.add(
-            sys.stderr,
-            level=console_level or level,
-            format=CONSOLE_FORMAT,
-            colorize=True
-        )
+        logger.add(sys.stderr, level=console_level or level, format=CONSOLE_FORMAT, colorize=True)
 
     # File output
     if log_file:
@@ -120,7 +109,7 @@ def setup_logging(
                 format=DEFAULT_FORMAT,
                 rotation=rotation,
                 retention=retention,
-                compression="zip"  # Compress rotated logs
+                compression="zip",  # Compress rotated logs
             )
             logger.debug(f"Logging configured: file={log_file}, level={level}")
 

@@ -1,57 +1,24 @@
-from . import DB_PATH, DB_USER, DB_PASSWORD, DB_DATABASE, DB_PORT, TEST_DB
-from .database import Database
-import analysis.acousticbrainz as acousticbrainz
-import analysis.bpm as bpm_analysis
-from analysis.ffmpeg import (
-    validate_path_mapping,
-    map_plex_path_to_local,
-    verify_path_accessible,
-)
-from loguru import logger
-import csv
 import json
 import os
 import re
 from time import sleep
-from typing import Optional
+
+from loguru import logger
+
+import analysis.acousticbrainz as acousticbrainz
+import analysis.bpm as bpm_analysis
 import analysis.lastfm as lastfm
-import pdb
+from analysis.ffmpeg import (
+    map_plex_path_to_local,
+    validate_path_mapping,
+    verify_path_accessible,
+)
+
+from . import DB_PASSWORD, DB_PATH, DB_USER, TEST_DB
+from .database import Database
 
 # TODO change database for production
 database = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB)
-
-
-def process_bpm(database: Database, track_list: csv, location_prefix: str):
-    """
-    Process the BPM for each track in the track list and update the 'bpm' field in the database.
-
-
-    Parameters:
-    database (Database): The database connection object.
-    track_list (csv): The list of tracks to process BPM for.
-    location_prefix (str): The prefix to prepend to the file location. Must include trailing slash.
-
-    Returns:
-    None
-    """
-    database.connect()
-    with open(track_list, 'r') as f:
-        reader = csv.DictReader(f)
-        lib_size = sum(1 for _ in reader)
-        logger.debug(f"Library size: {lib_size}")
-
-
-    with open(track_list, 'r') as f:
-        reader = csv.DictReader(f)
-        i = 1
-        for row in reader:
-            file_location = location_prefix + row['location']
-            # Above only applies to Neptune server. Change as needed.
-            track_bpm = bpm.get_bpm(file_location)
-            database.execute_query("UPDATE track_data SET bpm = %s WHERE id = %s", (track_bpm, row['id']))
-            logger.info(f"Processed BPM for {row['plex_id']}; {i} of {lib_size}")
-            i += 1
-    database.close()
 
 
 def populate_genres_table_from_track_data(database: Database):
@@ -63,7 +30,7 @@ def populate_genres_table_from_track_data(database: Database):
 
     for result in results:
         genre_str = result[0]
-        if genre_str != '[]':
+        if genre_str != "[]":
             try:
                 genre_str = genre_str.strip("[]").replace("'", "")
                 genres = [genre.strip() for genre in genre_str.split(",")]
@@ -106,7 +73,7 @@ def populate_track_genre_table(database: Database):
     for result in results:
         track_id = result[0]
         genre_str = result[1]
-        if genre_str != '[]':
+        if genre_str != "[]":
             try:
                 genre_str = genre_str.strip("[]").replace("'", "")
                 genres = [genre.strip() for genre in genre_str.split(",")]
@@ -115,8 +82,13 @@ def populate_track_genre_table(database: Database):
                     genre_id_result = database.execute_select_query(genre_id_query, (genre,))
                     if genre_id_result:
                         genre_id = genre_id_result[0][0]
-                        database.execute_query("INSERT INTO track_genres (track_id, genre_id) VALUES (%s, %s)", (track_id, genre_id))
-                        logger.info(f"Inserted track-genre pair: track_id={track_id}, genre_id={genre_id}")
+                        database.execute_query(
+                            "INSERT INTO track_genres (track_id, genre_id) VALUES (%s, %s)",
+                            (track_id, genre_id),
+                        )
+                        logger.info(
+                            f"Inserted track-genre pair: track_id={track_id}, genre_id={genre_id}"
+                        )
             except Exception as e:
                 logger.error(f"Error processing genre string: {e} - genre_str: {genre_str}")
 
@@ -135,7 +107,7 @@ def update_track_genre_table(database: Database, cutoff: str = None):
         results = database.execute_select_query(query_wo_cutoff)
     else:
         try:
-            cutoff_date = re.sub(r'(\d{2})(\d{2})(\d{4})', r'\3-\1-\2', cutoff)
+            cutoff_date = re.sub(r"(\d{2})(\d{2})(\d{4})", r"\3-\1-\2", cutoff)
             results = database.execute_select_query(query_w_cutoff, (cutoff_date,))
         except Exception as e:
             logger.error(f"There was an error querying db with cutoff: {e}")
@@ -144,7 +116,7 @@ def update_track_genre_table(database: Database, cutoff: str = None):
     for result in results:
         track_id = result[0]
         genre_str = result[1]
-        if genre_str != '[]':
+        if genre_str != "[]":
             try:
                 genre_str = genre_str.strip("[]").replace("'", "")
                 genres = [genre.strip() for genre in genre_str.split(",")]
@@ -153,8 +125,13 @@ def update_track_genre_table(database: Database, cutoff: str = None):
                     genre_id_result = database.execute_select_query(genre_id_query, (genre,))
                     if genre_id_result:
                         genre_id = genre_id_result[0][0]
-                        database.execute_query("INSERT INTO track_genres (track_id, genre_id) VALUES (%s, %s)", (track_id, genre_id))
-                        logger.info(f"Inserted track-genre pair: track_id={track_id}, genre_id={genre_id}")
+                        database.execute_query(
+                            "INSERT INTO track_genres (track_id, genre_id) VALUES (%s, %s)",
+                            (track_id, genre_id),
+                        )
+                        logger.info(
+                            f"Inserted track-genre pair: track_id={track_id}, genre_id={genre_id}"
+                        )
             except Exception as e:
                 logger.error(f"Error processing genre string: {e} - genre_str: {genre_str}")
 
@@ -190,8 +167,10 @@ def check_mbid_and_insert(database: Database, lastfm_json: json, mbid_list: list
     database.connect()
     mbid = lastfm.get_artist_mbid(lastfm_json)
     if mbid not in mbid_list:
-        artist = lastfm_json['artist']['name']
-        database.execute_query("UPDATE artists SET musicbrainz_id = %s WHERE artist = %s", (mbid, artist))
+        artist = lastfm_json["artist"]["name"]
+        database.execute_query(
+            "UPDATE artists SET musicbrainz_id = %s WHERE artist = %s", (mbid, artist)
+        )
         logger.info(f"Inserted MBID for {artist}: {mbid}")
 
 
@@ -218,7 +197,7 @@ def insert_last_fm_artist_data(database: Database, rate_limit_delay: float = 0.2
             Last.fm allows ~5 req/s averaged over 5 minutes.
     """
     logger.debug("Starting to insert Last.fm data into db.")
-    logger.info(f"Rate limit delay: {rate_limit_delay}s ({1/rate_limit_delay:.1f} req/s)")
+    logger.info(f"Rate limit delay: {rate_limit_delay}s ({1 / rate_limit_delay:.1f} req/s)")
     database.connect()
 
     try:
@@ -237,8 +216,7 @@ def insert_last_fm_artist_data(database: Database, rate_limit_delay: float = 0.2
                 if mbid:
                     logger.debug(f"MBID for {artist_name}: {mbid}")
                     database.execute_query(
-                        "UPDATE artists SET musicbrainz_id = %s WHERE id = %s",
-                        (mbid, artist_id)
+                        "UPDATE artists SET musicbrainz_id = %s WHERE id = %s", (mbid, artist_id)
                     )
 
                 # Process genres
@@ -247,30 +225,35 @@ def insert_last_fm_artist_data(database: Database, rate_limit_delay: float = 0.2
                     genre = genre.lower()
                     try:
                         # Insert genre if not exists using WHERE NOT EXISTS
-                        database.execute_query("""
+                        database.execute_query(
+                            """
                             INSERT INTO genres (genre)
                             SELECT %s
                             WHERE NOT EXISTS (
                                 SELECT 1 FROM genres 
                                 WHERE LOWER(genre) = LOWER(%s)
                             )
-                        """, (genre, genre))
+                        """,
+                            (genre, genre),
+                        )
 
                         # Get genre ID
                         genre_id = database.execute_select_query(
-                            "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)",
-                            (genre,)
+                            "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)", (genre,)
                         )[0][0]
 
                         # Insert genre relationship if not exists
-                        database.execute_query("""
+                        database.execute_query(
+                            """
                             INSERT INTO artist_genres (artist_id, genre_id)
                             SELECT %s, %s
                             WHERE NOT EXISTS (
                                 SELECT 1 FROM artist_genres
                                 WHERE artist_id = %s AND genre_id = %s
                             )
-                        """, (artist_id, genre_id, artist_id, genre_id))
+                        """,
+                            (artist_id, genre_id, artist_id, genre_id),
+                        )
 
                         logger.info(f"Processed genre for {artist_name}: {genre}")
                     except Exception as e:
@@ -287,34 +270,42 @@ def insert_last_fm_artist_data(database: Database, rate_limit_delay: float = 0.2
 
                     try:
                         # Insert similar artist if not exists
-                        database.execute_query("""
+                        database.execute_query(
+                            """
                             INSERT INTO artists (artist)
                             SELECT %s
                             WHERE NOT EXISTS (
                                 SELECT 1 FROM artists 
                                 WHERE LOWER(artist) = LOWER(%s)
                             )
-                        """, (similar_artist, similar_artist))
+                        """,
+                            (similar_artist, similar_artist),
+                        )
 
                         # Get similar artist ID
                         similar_artist_id = database.execute_select_query(
                             "SELECT id FROM artists WHERE LOWER(artist) = LOWER(%s)",
-                            (similar_artist,)
+                            (similar_artist,),
                         )[0][0]
 
                         # Insert similar artist relationship if not exists
-                        database.execute_query("""
+                        database.execute_query(
+                            """
                             INSERT INTO similar_artists (artist_id, similar_artist_id)
                             SELECT %s, %s
                             WHERE NOT EXISTS (
                                 SELECT 1 FROM similar_artists
                                 WHERE artist_id = %s AND similar_artist_id = %s
                             )
-                        """, (artist_id, similar_artist_id, artist_id, similar_artist_id))
+                        """,
+                            (artist_id, similar_artist_id, artist_id, similar_artist_id),
+                        )
 
                         logger.info(f"Processed similar artist: {artist_name} -> {similar_artist}")
                     except Exception as e:
-                        logger.error(f"Error processing similar artist {similar_artist} for {artist_name}: {e}")
+                        logger.error(
+                            f"Error processing similar artist {similar_artist} for {artist_name}: {e}"
+                        )
                         continue
 
             except Exception as e:
@@ -367,7 +358,7 @@ def insert_lastfm_track_data(
             if track_mbid:
                 database.execute_query(
                     "UPDATE track_data SET musicbrainz_id = %s WHERE id = %s",
-                    (track_mbid, track_id)
+                    (track_mbid, track_id),
                 )
                 logger.info(f"Updated MBID for {title}: {track_mbid}")
 
@@ -377,30 +368,35 @@ def insert_lastfm_track_data(
             genre = genre.lower()
             try:
                 # Insert genre if not exists using WHERE NOT EXISTS
-                database.execute_query("""
+                database.execute_query(
+                    """
                     INSERT INTO genres (genre)
                     SELECT %s
                     WHERE NOT EXISTS (
                         SELECT 1 FROM genres
                         WHERE LOWER(genre) = LOWER(%s)
                     )
-                """, (genre, genre))
+                """,
+                    (genre, genre),
+                )
 
                 # Get genre ID
                 genre_id = database.execute_select_query(
-                    "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)",
-                    (genre,)
+                    "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)", (genre,)
                 )[0][0]
 
                 # Insert genre relationship if not exists
-                database.execute_query("""
+                database.execute_query(
+                    """
                     INSERT INTO track_genres (track_id, genre_id)
                     SELECT %s, %s
                     WHERE NOT EXISTS (
                         SELECT 1 FROM track_genres
                         WHERE track_id = %s AND genre_id = %s
                     )
-                """, (track_id, genre_id, track_id, genre_id))
+                """,
+                    (track_id, genre_id, track_id, genre_id),
+                )
 
                 logger.debug(f"Processed genre for {title}: {genre}")
             except Exception as e:
@@ -416,7 +412,7 @@ def insert_lastfm_track_data(
 def process_lastfm_track_data(
     database: Database,
     rate_limit_delay: float = 0.25,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     skip_with_genres: bool = True,
 ) -> dict:
     """
@@ -439,14 +435,14 @@ def process_lastfm_track_data(
         dict with stats: {'total': int, 'processed': int, 'updated': int, 'skipped': int, 'failed': int}
     """
     logger.info("Starting Last.fm track data enrichment (Phase 6)")
-    logger.info(f"Rate limit delay: {rate_limit_delay}s ({1/rate_limit_delay:.1f} req/s)")
+    logger.info(f"Rate limit delay: {rate_limit_delay}s ({1 / rate_limit_delay:.1f} req/s)")
 
     stats = {
-        'total': 0,
-        'processed': 0,
-        'updated': 0,
-        'skipped': 0,
-        'failed': 0,
+        "total": 0,
+        "processed": 0,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 0,
     }
 
     database.connect()
@@ -471,9 +467,9 @@ def process_lastfm_track_data(
         query += f" LIMIT {limit}"
 
     tracks = database.execute_select_query(query)
-    stats['total'] = len(tracks)
+    stats["total"] = len(tracks)
 
-    if stats['total'] == 0:
+    if stats["total"] == 0:
         logger.info("No tracks found needing Last.fm enrichment")
         database.close()
         return stats
@@ -481,9 +477,9 @@ def process_lastfm_track_data(
     logger.info(f"Found {stats['total']} tracks to process")
 
     # Estimate time
-    estimated_seconds = stats['total'] * rate_limit_delay
+    estimated_seconds = stats["total"] * rate_limit_delay
     estimated_hours = estimated_seconds / 3600
-    logger.info(f"Estimated time: {estimated_hours:.1f} hours at {1/rate_limit_delay:.1f} req/s")
+    logger.info(f"Estimated time: {estimated_hours:.1f} hours at {1 / rate_limit_delay:.1f} req/s")
 
     for i, track_data in enumerate(tracks):
         track_id, artist, title, existing_mbid = track_data
@@ -492,23 +488,23 @@ def process_lastfm_track_data(
         if i > 0:  # Skip delay on first request
             sleep(rate_limit_delay)
 
-        stats['processed'] += 1
+        stats["processed"] += 1
 
         # Log lookup method
         lookup_method = "MBID" if existing_mbid else "artist+track"
-        logger.debug(f"[{i+1}/{stats['total']}] {artist} - {title} (via {lookup_method})")
+        logger.debug(f"[{i + 1}/{stats['total']}] {artist} - {title} (via {lookup_method})")
 
         # Process track (pass full tuple including MBID)
         success = insert_lastfm_track_data(database, track_data)
 
         if success:
-            stats['updated'] += 1
+            stats["updated"] += 1
         else:
-            stats['failed'] += 1
+            stats["failed"] += 1
 
         # Progress logging every 100 tracks
         if (i + 1) % 100 == 0:
-            elapsed_pct = (i + 1) / stats['total'] * 100
+            elapsed_pct = (i + 1) / stats["total"] * 100
             logger.info(
                 f"Progress: {i + 1}/{stats['total']} ({elapsed_pct:.1f}%), "
                 f"{stats['updated']} updated, {stats['failed']} failed"
@@ -521,8 +517,8 @@ def process_lastfm_track_data(
         f"{stats['updated']} updated, {stats['failed']} failed"
     )
 
-    if stats['total'] > 0:
-        success_rate = stats['updated'] / stats['total'] * 100
+    if stats["total"] > 0:
+        success_rate = stats["updated"] / stats["total"] * 100
         logger.info(f"Success rate: {success_rate:.1f}%")
 
     return stats
@@ -558,7 +554,7 @@ def process_bpm_acousticbrainz(database: Database) -> dict:
     if total == 0:
         logger.info("No tracks found needing BPM lookup")
         database.close()
-        return {'total': 0, 'hits': 0, 'misses': 0, 'updated': 0}
+        return {"total": 0, "hits": 0, "misses": 0, "updated": 0}
 
     logger.info(f"Found {total} tracks with MBID but no BPM")
 
@@ -572,8 +568,7 @@ def process_bpm_acousticbrainz(database: Database) -> dict:
             # Round BPM to nearest integer for storage
             bpm_int = round(bpm_value)
             database.execute_query(
-                "UPDATE track_data SET bpm = %s WHERE id = %s",
-                (bpm_int, track_id)
+                "UPDATE track_data SET bpm = %s WHERE id = %s", (bpm_int, track_id)
             )
             updated += 1
             logger.debug(f"Updated track {track_id} with BPM {bpm_int}")
@@ -583,14 +578,14 @@ def process_bpm_acousticbrainz(database: Database) -> dict:
     database.close()
 
     stats = {
-        'total': total,
-        'hits': len(bpm_results),
-        'misses': total - len(bpm_results),
-        'updated': updated
+        "total": total,
+        "hits": len(bpm_results),
+        "misses": total - len(bpm_results),
+        "updated": updated,
     }
 
     logger.info(f"AcousticBrainz BPM lookup complete: {stats}")
-    logger.info(f"Hit rate: {stats['hits']/total*100:.1f}%")
+    logger.info(f"Hit rate: {stats['hits'] / total * 100:.1f}%")
 
     return stats
 
@@ -599,7 +594,7 @@ def process_bpm_essentia(
     database: Database,
     use_test_paths: bool = False,
     batch_size: int = 25,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     rest_between_batches: float = 10.0,
 ) -> dict:
     """
@@ -631,35 +626,35 @@ def process_bpm_essentia(
             'skipped': bool - True if skipped due to config/environment issues
     """
     stats = {
-        'total': 0,
-        'accessible': 0,
-        'inaccessible': 0,
-        'analyzed': 0,
-        'failed': 0,
-        'updated': 0,
-        'errors': 0,
-        'skipped': False,
+        "total": 0,
+        "accessible": 0,
+        "inaccessible": 0,
+        "analyzed": 0,
+        "failed": 0,
+        "updated": 0,
+        "errors": 0,
+        "skipped": False,
     }
 
     # Check Essentia availability
     if not bpm_analysis.check_essentia_available():
         logger.warning("Essentia not available - skipping local BPM analysis")
-        stats['skipped'] = True
+        stats["skipped"] = True
         return stats
 
     # Validate path mapping
     path_validation = validate_path_mapping(use_test=use_test_paths)
-    if not path_validation['configured']:
+    if not path_validation["configured"]:
         logger.warning("Path mapping not configured - skipping local BPM analysis")
-        stats['skipped'] = True
+        stats["skipped"] = True
         return stats
 
-    if not path_validation['accessible']:
+    if not path_validation["accessible"]:
         logger.warning(
             f"Music path not accessible: {path_validation['local_prefix']} - "
             "skipping local BPM analysis"
         )
-        stats['skipped'] = True
+        stats["skipped"] = True
         return stats
 
     # Query tracks without BPM
@@ -680,7 +675,7 @@ def process_bpm_essentia(
         logger.info("No tracks without BPM found")
         return stats
 
-    stats['total'] = len(tracks)
+    stats["total"] = len(tracks)
     logger.info(
         f"Starting Essentia BPM analysis: {stats['total']} tracks, "
         f"batch_size={batch_size}, rest={rest_between_batches}s"
@@ -695,11 +690,11 @@ def process_bpm_essentia(
         local_path = map_plex_path_to_local(plex_path, use_test=use_test_paths)
 
         if not local_path or not verify_path_accessible(local_path):
-            logger.debug(f"  Skipped: file not accessible")
-            stats['inaccessible'] += 1
+            logger.debug("  Skipped: file not accessible")
+            stats["inaccessible"] += 1
             continue
 
-        stats['accessible'] += 1
+        stats["accessible"] += 1
 
         # Log the file being analyzed (this is where CPU-intensive work happens)
         filename = os.path.basename(local_path) if local_path else "unknown"
@@ -709,24 +704,23 @@ def process_bpm_essentia(
         bpm_value = bpm_analysis.get_bpm_essentia(local_path)
 
         if bpm_value is None:
-            logger.debug(f"  Failed: no BPM detected")
-            stats['failed'] += 1
+            logger.debug("  Failed: no BPM detected")
+            stats["failed"] += 1
             continue
 
-        stats['analyzed'] += 1
+        stats["analyzed"] += 1
         logger.debug(f"  BPM: {bpm_value:.1f}")
 
         # Update database
         try:
             bpm_int = round(bpm_value)
             database.execute_query(
-                "UPDATE track_data SET bpm = %s WHERE id = %s",
-                (bpm_int, track_id)
+                "UPDATE track_data SET bpm = %s WHERE id = %s", (bpm_int, track_id)
             )
-            stats['updated'] += 1
+            stats["updated"] += 1
         except Exception as e:
             logger.error(f"Error updating track {track_id} with BPM {bpm_value}: {e}")
-            stats['errors'] += 1
+            stats["errors"] += 1
 
         # Progress logging and rest between batches
         if (i + 1) % batch_size == 0:
@@ -746,9 +740,8 @@ def process_bpm_essentia(
         f"{stats['updated']} updated"
     )
 
-    if stats['total'] > 0:
-        coverage_pct = stats['analyzed'] / stats['total'] * 100
+    if stats["total"] > 0:
+        coverage_pct = stats["analyzed"] / stats["total"] * 100
         logger.info(f"Analysis success rate: {coverage_pct:.1f}%")
 
     return stats
-

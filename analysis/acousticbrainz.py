@@ -5,9 +5,10 @@ AcousticBrainz is a read-only database of pre-computed audio features.
 The service shut down in 2022 but the API still works for lookups.
 No API key required. Data is CC0 licensed.
 """
-import requests
-from typing import Optional, Dict, List
+
 from time import sleep
+
+import requests
 from loguru import logger
 
 # AcousticBrainz API endpoints
@@ -20,7 +21,7 @@ REQUEST_DELAY = 0.1  # 100ms between requests
 BULK_BATCH_SIZE = 25  # Max MBIDs per bulk request
 
 
-def get_bpm_by_mbid(mbid: str) -> Optional[float]:
+def get_bpm_by_mbid(mbid: str) -> float | None:
     """
     Get BPM for a single track from AcousticBrainz.
 
@@ -57,7 +58,7 @@ def get_bpm_by_mbid(mbid: str) -> Optional[float]:
         return None
 
 
-def bulk_get_bpm(mbids: List[str]) -> Dict[str, float]:
+def bulk_get_bpm(mbids: list[str]) -> dict[str, float]:
     """
     Get BPM for multiple tracks in a single request.
 
@@ -79,11 +80,7 @@ def bulk_get_bpm(mbids: List[str]) -> Dict[str, float]:
     url = BULK_ENDPOINT.format(base=BASE_URL)
 
     try:
-        response = requests.get(
-            url,
-            params={"recording_ids": recording_ids},
-            timeout=30
-        )
+        response = requests.get(url, params={"recording_ids": recording_ids}, timeout=30)
 
         if response.status_code == 200:
             data = response.json()
@@ -108,7 +105,7 @@ def bulk_get_bpm(mbids: List[str]) -> Dict[str, float]:
         return {}
 
 
-def fetch_bpm_for_tracks(tracks: List[tuple], use_bulk: bool = True) -> Dict[int, float]:
+def fetch_bpm_for_tracks(tracks: list[tuple], use_bulk: bool = True) -> dict[int, float]:
     """
     Fetch BPM for a list of tracks from database.
 
@@ -130,7 +127,7 @@ def fetch_bpm_for_tracks(tracks: List[tuple], use_bulk: bool = True) -> Dict[int
     if use_bulk:
         # Process in batches
         for i in range(0, total, BULK_BATCH_SIZE):
-            batch = tracks[i:i + BULK_BATCH_SIZE]
+            batch = tracks[i : i + BULK_BATCH_SIZE]
             mbid_to_track_id = {mbid: track_id for track_id, mbid in batch}
             mbids = list(mbid_to_track_id.keys())
 
@@ -165,6 +162,6 @@ def fetch_bpm_for_tracks(tracks: List[tuple], use_bulk: bool = True) -> Dict[int
             sleep(REQUEST_DELAY)
 
     logger.info(f"AcousticBrainz lookup complete: {hits} hits, {misses} misses, {errors} errors")
-    logger.info(f"Hit rate: {hits/total*100:.1f}%" if total > 0 else "No tracks to process")
+    logger.info(f"Hit rate: {hits / total * 100:.1f}%" if total > 0 else "No tracks to process")
 
     return results

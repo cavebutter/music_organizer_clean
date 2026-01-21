@@ -5,12 +5,14 @@ This module provides local BPM detection for tracks that don't have BPM data
 from AcousticBrainz. It's designed to run as Phase 7.2 in the pipeline,
 after AcousticBrainz lookup (Phase 7.1).
 """
+
 import os
-from typing import Optional
+
 from loguru import logger
 
 try:
     import essentia.standard as es
+
     ESSENTIA_AVAILABLE = True
 except ImportError:
     ESSENTIA_AVAILABLE = False
@@ -27,7 +29,7 @@ def check_essentia_available() -> bool:
     return ESSENTIA_AVAILABLE
 
 
-def get_bpm_essentia(filepath: str) -> Optional[float]:
+def get_bpm_essentia(filepath: str) -> float | None:
     """
     Calculate BPM for an audio file using Essentia's RhythmExtractor2013.
 
@@ -72,7 +74,9 @@ def get_bpm_essentia(filepath: str) -> Optional[float]:
             # Still return it - let the caller decide
             return float(bpm)
 
-        logger.debug(f"BPM: {bpm:.2f} (confidence: {confidence:.2f}) for {os.path.basename(filepath)}")
+        logger.debug(
+            f"BPM: {bpm:.2f} (confidence: {confidence:.2f}) for {os.path.basename(filepath)}"
+        )
         return float(bpm)
 
     except RuntimeError as e:
@@ -84,7 +88,7 @@ def get_bpm_essentia(filepath: str) -> Optional[float]:
         return None
 
 
-def get_bpm_with_confidence(filepath: str) -> tuple[Optional[float], Optional[float]]:
+def get_bpm_with_confidence(filepath: str) -> tuple[float | None, float | None]:
     """
     Calculate BPM and confidence score for an audio file.
 

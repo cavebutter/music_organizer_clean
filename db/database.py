@@ -1,7 +1,7 @@
-import mysql.connector
-from loguru import logger
 import sys
 
+import mysql.connector
+from loguru import logger
 
 create_table_methods = []
 
@@ -17,6 +17,8 @@ def register_create_table_method(func):
     """
     create_table_methods.append(func)
     return func
+
+
 class Database:
     """
     A class used to represent a connection to a MySQL database.
@@ -65,10 +67,7 @@ class Database:
         else:
             try:
                 self.connection = mysql.connector.connect(
-                    host=self.host,
-                    user=self.user,
-                    password=self.password,
-                    database=self.database
+                    host=self.host, user=self.user, password=self.password, database=self.database
                 )
                 logger.info("Connected to MySQL server")
             except mysql.connector.Error as error:
@@ -112,7 +111,7 @@ class Database:
         cursor.execute(query)
         self.connection.commit()
         cursor.close()
-        logger.info(f"Table created")
+        logger.info("Table created")
 
     def execute_query(self, query, params=None):
         """
@@ -170,7 +169,6 @@ class Database:
             self.connection.rollback()
         return result
 
-
     def create_all_tables(self):
         """
         Creates all tables in the database.
@@ -190,13 +188,13 @@ class Database:
         """
         self.execute_query("SET FOREIGN_KEY_CHECKS = 0")
         self.drop_table(table_name)
-        artists_ddl = '''CREATE TABLE IF NOT EXISTS artists(
+        artists_ddl = """CREATE TABLE IF NOT EXISTS artists(
         id INTEGER PRIMARY KEY AUTO_INCREMENT
         , artist VARCHAR(255) NOT NULL
         , last_fm_id VARCHAR(255)
         , discogs_id VARCHAR(255)
         , musicbrainz_id VARCHAR(255)
-        )'''
+        )"""
         self.create_table(artists_ddl)
         self.execute_query("SET FOREIGN_KEY_CHECKS = 1")
 
@@ -214,7 +212,7 @@ class Database:
         """
         self.execute_query("SET FOREIGN_KEY_CHECKS = 0")
         self.drop_table("track_data")
-        track_data_ddl = f'''
+        track_data_ddl = """
         CREATE TABLE IF NOT EXISTS track_data(
         id INTEGER PRIMARY KEY AUTO_INCREMENT
         , title VARCHAR (1000) NOT NULL
@@ -228,11 +226,11 @@ class Database:
         , artist_id INTEGER
         , plex_id INTEGER
         , musicbrainz_id VARCHAR(255)
-        , FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE)'''
+        , FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE)"""
         self.create_table(track_data_ddl)
-        ix_loc = '''CREATE INDEX ix_loc ON track_data (location)'''
-        ix_filepath = '''CREATE INDEX ix_fileath on track_data (filepath)'''
-        ix_bpm = '''CREATE INDEX ix_bpm on track_data (bpm)'''
+        ix_loc = """CREATE INDEX ix_loc ON track_data (location)"""
+        ix_filepath = """CREATE INDEX ix_fileath on track_data (filepath)"""
+        ix_bpm = """CREATE INDEX ix_bpm on track_data (bpm)"""
         self.execute_query(ix_loc)
         self.execute_query(ix_filepath)
         self.execute_query(ix_bpm)
@@ -250,12 +248,12 @@ class Database:
         """
         self.execute_query("SET FOREIGN_KEY_CHECKS = 0")
         self.drop_table("history")
-        history_ddl = '''
+        history_ddl = """
         CREATE TABLE IF NOT EXISTS history(
         id INTEGER PRIMARY KEY AUTO_INCREMENT
         , tx_date DATE
         , records INTEGER (6)
-        , latest_entry DATE)'''
+        , latest_entry DATE)"""
         self.create_table(history_ddl)
         self.execute_query("SET FOREIGN_KEY_CHECKS = 1")
 
@@ -284,13 +282,13 @@ class Database:
         """
         self.execute_query("SET FOREIGN_KEY_CHECKS = 0")
         self.drop_table("similar_artists")
-        similar_artists_ddl = '''
+        similar_artists_ddl = """
         CREATE TABLE IF NOT EXISTS similar_artists(
         id INTEGER PRIMARY KEY AUTO_INCREMENT
         , artist_id INTEGER
         , similar_artist_id INTEGER
         , FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE
-        , FOREIGN KEY (similar_artist_id) REFERENCES artists(id) ON DELETE CASCADE)'''
+        , FOREIGN KEY (similar_artist_id) REFERENCES artists(id) ON DELETE CASCADE)"""
         self.create_table(similar_artists_ddl)
         self.execute_query("SET FOREIGN_KEY_CHECKS = 1")
 
@@ -300,16 +298,15 @@ class Database:
         Creates the genres table in the database.
         """
         self.execute_query("SET FOREIGN_KEY_CHECKS = 0")
-        self.drop_table('genres')
-        genres_ddl = '''
+        self.drop_table("genres")
+        genres_ddl = """
         CREATE TABLE IF NOT EXISTS genres(
         id INTEGER PRIMARY KEY AUTO_INCREMENT
         , genre VARCHAR(1000) NOT NULL
         )
-        '''
+        """
         self.create_table(genres_ddl)
         self.execute_query("SET FOREIGN_KEY_CHECKS = 1")
-
 
     @register_create_table_method
     def create_track_genres_table(self):
@@ -317,8 +314,8 @@ class Database:
         Creates the track_genres table in the database.
         """
         self.execute_query("SET FOREIGN_KEY_CHECKS = 0")
-        self.drop_table('track_genres')
-        track_genres_ddl = '''
+        self.drop_table("track_genres")
+        track_genres_ddl = """
         CREATE TABLE IF NOT EXISTS track_genres(
         id INTEGER PRIMARY KEY AUTO_INCREMENT
         , track_id INTEGER
@@ -326,10 +323,9 @@ class Database:
         , FOREIGN KEY (track_id) REFERENCES track_data(id) ON DELETE CASCADE
         , FOREIGN KEY (genre_id) REFERENCES genres(id) ON DELETE CASCADE
         )
-        '''
+        """
         self.create_table(track_genres_ddl)
         self.execute_query("SET FOREIGN_KEY_CHECKS = 1")
-
 
     @register_create_table_method
     def create_artist_genres_table(self):
@@ -337,8 +333,8 @@ class Database:
         Creates the artist_genres table in the database.
         """
         self.execute_query("SET FOREIGN_KEY_CHECKS = 0")
-        self.drop_table('artist_genres')
-        artist_genres_ddl = '''
+        self.drop_table("artist_genres")
+        artist_genres_ddl = """
         CREATE TABLE IF NOT EXISTS artist_genres(
         id INTEGER PRIMARY KEY AUTO_INCREMENT
         , artist_id INTEGER
@@ -346,7 +342,7 @@ class Database:
         , FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE
         , FOREIGN KEY (genre_id) REFERENCES genres(id) ON DELETE CASCADE
         )
-        '''
+        """
         self.create_table(artist_genres_ddl)
         self.execute_query("SET FOREIGN_KEY_CHECKS = 1")
 
@@ -357,7 +353,7 @@ class Database:
         self.connect()
         self.execute_query("SET FOREIGN_KEY_CHECKS = 0")
         for method in create_table_methods:
-            table_name = method.__name__.replace('create_', '').replace('_table', '')
+            table_name = method.__name__.replace("create_", "").replace("_table", "")
             self.drop_table(table_name)
         self.execute_query("SET FOREIGN_KEY_CHECKS = 1")
         self.close()

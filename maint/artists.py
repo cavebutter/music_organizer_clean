@@ -1,7 +1,8 @@
-from db.database import Database
-import db.db_update as dbu
-import analysis.lastfm as lfm
 from loguru import logger
+
+import analysis.lastfm as lfm
+import db.db_update as dbu
+from db.database import Database
 
 db = dbu.database
 
@@ -19,7 +20,9 @@ def maintain_artists_mbid(database: Database):
         info = lfm.get_artist_info(artist)
         mbid = lfm.get_artist_mbid(info)
         if mbid:
-            update_query = f"""UPDATE artists SET musicbrainz_id = '{mbid}' WHERE id = {artist_id}"""
+            update_query = (
+                f"""UPDATE artists SET musicbrainz_id = '{mbid}' WHERE id = {artist_id}"""
+            )
             database.execute_query(update_query)
             logger.info(f"Updated {artist} with mbid {mbid}")
         else:
@@ -50,30 +53,35 @@ WHERE artist_genres.artist_id IS NULL;
             genre = genre.lower()
             try:
                 # Insert genre if not exists using WHERE NOT EXISTS
-                database.execute_query("""
+                database.execute_query(
+                    """
                                     INSERT INTO genres (genre)
                                     SELECT %s
                                     WHERE NOT EXISTS (
                                         SELECT 1 FROM genres 
                                         WHERE LOWER(genre) = LOWER(%s)
                                     )
-                                """, (genre, genre))
+                                """,
+                    (genre, genre),
+                )
 
                 # Get genre ID
                 genre_id = database.execute_select_query(
-                    "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)",
-                    (genre,)
+                    "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)", (genre,)
                 )[0][0]
 
                 # Insert genre relationship if not exists
-                database.execute_query("""
+                database.execute_query(
+                    """
                                     INSERT INTO artist_genres (artist_id, genre_id)
                                     SELECT %s, %s
                                     WHERE NOT EXISTS (
                                         SELECT 1 FROM artist_genres
                                         WHERE artist_id = %s AND genre_id = %s
                                     )
-                                """, (artist_id, genre_id, artist_id, genre_id))
+                                """,
+                    (artist_id, genre_id, artist_id, genre_id),
+                )
 
                 logger.info(f"Processed genre for {artist}: {genre}")
             except Exception as e:

@@ -3,7 +3,9 @@ Integration tests for the BPM enrichment pipeline.
 
 Tests the full flow: sandbox DB -> AcousticBrainz API -> sandbox DB update.
 """
+
 import pytest
+
 import db.db_update as dbu
 
 
@@ -24,7 +26,7 @@ class TestProcessBpmAcousticbrainz:
         """All stats should be non-negative integers."""
         stats = dbu.process_bpm_acousticbrainz(db_test)
 
-        for key, value in stats.items():
+        for _key, value in stats.items():
             assert isinstance(value, int)
             assert value >= 0
 
@@ -74,8 +76,7 @@ class TestBpmPipelineWithFreshData:
         for track_id, bpm in original:
             if bpm:
                 db_test.execute_query(
-                    "UPDATE track_data SET bpm = %s WHERE id = %s",
-                    (bpm, track_id)
+                    "UPDATE track_data SET bpm = %s WHERE id = %s", (bpm, track_id)
                 )
         db_test.close()
 

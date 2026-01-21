@@ -1,9 +1,10 @@
-import analysis.bpm as b
-import db.db_update as dbu
-from loguru import logger
 import os
 import subprocess as sub
 
+from loguru import logger
+
+import analysis.bpm as b
+import db.db_update as dbu
 
 db = dbu.database
 

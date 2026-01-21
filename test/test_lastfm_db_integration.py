@@ -9,13 +9,14 @@ Tests the functions that populate:
 Uses mocked Last.fm API responses and the sandbox database.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
-from db import DB_PATH, DB_USER, DB_PASSWORD, TEST_DB
-from db.database import Database
-from db import db_update as dbu
-from analysis import lastfm
+from unittest.mock import patch
 
+import pytest
+
+from analysis import lastfm
+from db import DB_PASSWORD, DB_PATH, DB_USER, TEST_DB
+from db import db_update as dbu
+from db.database import Database
 
 # Sample API responses for mocking
 SAMPLE_RESPONSES = {
@@ -92,15 +93,9 @@ def clean_test_tables(test_db):
     test_db.execute_query("DELETE FROM artists WHERE id > 0")
 
     # Insert test artists
-    test_db.execute_query(
-        "INSERT INTO artists (id, artist) VALUES (9001, 'Black Sabbath')"
-    )
-    test_db.execute_query(
-        "INSERT INTO artists (id, artist) VALUES (9002, 'The Clash')"
-    )
-    test_db.execute_query(
-        "INSERT INTO artists (id, artist) VALUES (9003, 'Unknown Artist')"
-    )
+    test_db.execute_query("INSERT INTO artists (id, artist) VALUES (9001, 'Black Sabbath')")
+    test_db.execute_query("INSERT INTO artists (id, artist) VALUES (9002, 'The Clash')")
+    test_db.execute_query("INSERT INTO artists (id, artist) VALUES (9003, 'Unknown Artist')")
 
     test_db.close()
 
@@ -153,9 +148,7 @@ class TestInsertLastFmArtistData:
 
     @patch("db.db_update.lastfm.get_artist_info")
     @patch("db.db_update.sleep")
-    def test_creates_artist_genre_relationships(
-        self, mock_sleep, mock_api, clean_test_tables
-    ):
+    def test_creates_artist_genre_relationships(self, mock_sleep, mock_api, clean_test_tables):
         """Should create artist_genres relationships."""
         mock_api.side_effect = mock_get_artist_info
 
@@ -191,9 +184,7 @@ class TestInsertLastFmArtistData:
 
     @patch("db.db_update.lastfm.get_artist_info")
     @patch("db.db_update.sleep")
-    def test_creates_similar_artist_relationships(
-        self, mock_sleep, mock_api, clean_test_tables
-    ):
+    def test_creates_similar_artist_relationships(self, mock_sleep, mock_api, clean_test_tables):
         """Should create similar_artists relationships."""
         mock_api.side_effect = mock_get_artist_info
 
@@ -274,9 +265,7 @@ class TestInsertLastFmArtistData:
 
     @patch("db.db_update.lastfm.get_artist_info")
     @patch("db.db_update.sleep")
-    def test_no_duplicate_artist_genre_relationships(
-        self, mock_sleep, mock_api, clean_test_tables
-    ):
+    def test_no_duplicate_artist_genre_relationships(self, mock_sleep, mock_api, clean_test_tables):
         """Should not create duplicate artist_genre relationships."""
         mock_api.side_effect = mock_get_artist_info
 
@@ -331,9 +320,7 @@ class TestIntegration:
         test_db.connect()
 
         # Insert a test artist
-        test_db.execute_query(
-            "INSERT INTO artists (id, artist) VALUES (99999, 'Radiohead')"
-        )
+        test_db.execute_query("INSERT INTO artists (id, artist) VALUES (99999, 'Radiohead')")
 
         try:
             # Get real Last.fm data

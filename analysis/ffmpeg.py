@@ -1,9 +1,9 @@
-import subprocess as s
-import os
-from typing import Optional
-from loguru import logger
 import json
+import os
+import subprocess as s
+
 from dotenv import load_dotenv
+from loguru import logger
 
 from db.database import Database
 
@@ -24,12 +24,7 @@ def check_ffprobe_available() -> bool:
         True if ffprobe is available, False otherwise
     """
     try:
-        result = s.run(
-            ["ffprobe", "-version"],
-            stdout=s.PIPE,
-            stderr=s.PIPE,
-            text=True
-        )
+        result = s.run(["ffprobe", "-version"], capture_output=True, text=True)
         if result.returncode == 0:
             logger.debug("ffprobe is available")
             return True
@@ -61,12 +56,12 @@ def validate_path_mapping(use_test: bool = False) -> dict:
             'errors': list[str] - any error messages
     """
     result = {
-        'configured': False,
-        'accessible': False,
-        'plex_prefix': '',
-        'local_prefix': '',
-        'sample_file_ok': False,
-        'errors': []
+        "configured": False,
+        "accessible": False,
+        "plex_prefix": "",
+        "local_prefix": "",
+        "sample_file_ok": False,
+        "errors": [],
     }
 
     if use_test:
@@ -78,49 +73,53 @@ def validate_path_mapping(use_test: bool = False) -> dict:
         local_prefix = MUSIC_PATH_PREFIX_LOCAL
         env_name = "production"
 
-    result['plex_prefix'] = plex_prefix
-    result['local_prefix'] = local_prefix
+    result["plex_prefix"] = plex_prefix
+    result["local_prefix"] = local_prefix
 
     # Check if env vars are configured
     if not plex_prefix:
-        result['errors'].append(f"MUSIC_PATH_PREFIX_PLEX{'_TEST' if use_test else ''} not configured")
+        result["errors"].append(
+            f"MUSIC_PATH_PREFIX_PLEX{'_TEST' if use_test else ''} not configured"
+        )
     if not local_prefix:
-        result['errors'].append(f"MUSIC_PATH_PREFIX_LOCAL{'_TEST' if use_test else ''} not configured")
+        result["errors"].append(
+            f"MUSIC_PATH_PREFIX_LOCAL{'_TEST' if use_test else ''} not configured"
+        )
 
     if not plex_prefix or not local_prefix:
         logger.warning(f"Path mapping not configured for {env_name}")
         return result
 
-    result['configured'] = True
+    result["configured"] = True
 
     # Check if local path exists
     if os.path.isdir(local_prefix):
-        result['accessible'] = True
+        result["accessible"] = True
         logger.info(f"Local path accessible: {local_prefix}")
 
         # Try to find at least one audio file to verify read access
-        for root, dirs, files in os.walk(local_prefix):
+        for root, _dirs, files in os.walk(local_prefix):
             for f in files:
-                if f.lower().endswith(('.mp3', '.flac', '.m4a')):
+                if f.lower().endswith((".mp3", ".flac", ".m4a")):
                     test_file = os.path.join(root, f)
                     if os.access(test_file, os.R_OK):
-                        result['sample_file_ok'] = True
+                        result["sample_file_ok"] = True
                         logger.debug(f"Sample file accessible: {test_file}")
                         break
-            if result['sample_file_ok']:
+            if result["sample_file_ok"]:
                 break
 
-        if not result['sample_file_ok']:
-            result['errors'].append(f"No readable audio files found in {local_prefix}")
+        if not result["sample_file_ok"]:
+            result["errors"].append(f"No readable audio files found in {local_prefix}")
             logger.warning(f"No readable audio files found in {local_prefix}")
     else:
-        result['errors'].append(f"Local path not accessible: {local_prefix}")
+        result["errors"].append(f"Local path not accessible: {local_prefix}")
         logger.warning(f"Local path not accessible: {local_prefix} - is the mount available?")
 
     return result
 
 
-def map_plex_path_to_local(plex_path: str, use_test: bool = False) -> Optional[str]:
+def map_plex_path_to_local(plex_path: str, use_test: bool = False) -> str | None:
     """
     Map a Plex-stored filepath to a locally accessible path.
 
@@ -172,7 +171,7 @@ def verify_path_accessible(filepath: str) -> bool:
     return os.path.isfile(filepath) and os.access(filepath, os.R_OK)
 
 
-def _get_tag_safe(track_info: dict, tag_names: list[str]) -> Optional[str]:
+def _get_tag_safe(track_info: dict, tag_names: list[str]) -> str | None:
     """
     Safely extract a tag from ffprobe output, trying multiple name variants.
 
@@ -213,33 +212,33 @@ def _get_tag_safe(track_info: dict, tag_names: list[str]) -> Optional[str]:
 # Tag name variants for MusicBrainz IDs
 # Different taggers and formats use different names for the same data
 TRACK_MBID_TAGS = [
-    'MusicBrainz Track Id',
-    'MUSICBRAINZ_TRACKID',
-    'musicbrainz_trackid',
-    'MusicBrainz Recording Id',
-    'MUSICBRAINZ_RECORDINGID',
-    'musicbrainz_recordingid',
-    'MusicBrainz Release Track Id',  # Picard uses this
-    'MUSICBRAINZ_RELEASETRACKID',
-    'musicbrainz_releasetrackid',
+    "MusicBrainz Track Id",
+    "MUSICBRAINZ_TRACKID",
+    "musicbrainz_trackid",
+    "MusicBrainz Recording Id",
+    "MUSICBRAINZ_RECORDINGID",
+    "musicbrainz_recordingid",
+    "MusicBrainz Release Track Id",  # Picard uses this
+    "MUSICBRAINZ_RELEASETRACKID",
+    "musicbrainz_releasetrackid",
 ]
 
 ARTIST_MBID_TAGS = [
-    'MusicBrainz Artist Id',
-    'MUSICBRAINZ_ARTISTID',
-    'musicbrainz_artistid',
+    "MusicBrainz Artist Id",
+    "MUSICBRAINZ_ARTISTID",
+    "musicbrainz_artistid",
 ]
 
 ARTIST_NAME_TAGS = [
-    'artist',
-    'ARTIST',
-    'Artist',
-    'album_artist',
-    'ALBUM_ARTIST',
+    "artist",
+    "ARTIST",
+    "Artist",
+    "album_artist",
+    "ALBUM_ARTIST",
 ]
 
 
-def ffmpeg_get_info(filepath: str) -> Optional[dict]:
+def ffmpeg_get_info(filepath: str) -> dict | None:
     """
     Get audio file metadata using ffprobe.
 
@@ -255,15 +254,17 @@ def ffmpeg_get_info(filepath: str) -> Optional[dict]:
     logger.debug(f"Getting ffprobe info for {filepath}")
     cmd = [
         "ffprobe",
-        "-v", "error",
-        "-print_format", "json",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
         "-show_format",
         "-show_streams",
-        filepath
+        filepath,
     ]
 
     try:
-        result = s.run(cmd, stdout=s.PIPE, stderr=s.PIPE, text=True)
+        result = s.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
             logger.debug(f"ffprobe error for {filepath}: {result.stderr}")
@@ -275,7 +276,7 @@ def ffmpeg_get_info(filepath: str) -> Optional[dict]:
         return None
 
 
-def ffmpeg_get_mbtid(track_info: dict) -> Optional[str]:
+def ffmpeg_get_mbtid(track_info: dict) -> str | None:
     """
     Extract MusicBrainz Track/Recording ID from ffprobe output.
 
@@ -293,7 +294,7 @@ def ffmpeg_get_mbtid(track_info: dict) -> Optional[str]:
     return mbid
 
 
-def ffmpeg_get_artist_mbid(track_info: dict) -> Optional[str]:
+def ffmpeg_get_artist_mbid(track_info: dict) -> str | None:
     """
     Extract MusicBrainz Artist ID from ffprobe output.
 
@@ -311,7 +312,7 @@ def ffmpeg_get_artist_mbid(track_info: dict) -> Optional[str]:
     return mbid
 
 
-def ffmpeg_get_artist_name(track_info: dict) -> Optional[str]:
+def ffmpeg_get_artist_name(track_info: dict) -> str | None:
     """
     Extract artist name from ffprobe output.
 
@@ -324,7 +325,7 @@ def ffmpeg_get_artist_name(track_info: dict) -> Optional[str]:
     return _get_tag_safe(track_info, ARTIST_NAME_TAGS)
 
 
-def ffmpeg_get_track_artist_and_artist_mbid(track_info: dict) -> tuple[Optional[str], Optional[str]]:
+def ffmpeg_get_track_artist_and_artist_mbid(track_info: dict) -> tuple[str | None, str | None]:
     """
     Extract artist name and MusicBrainz Artist ID from ffprobe output.
 
@@ -346,21 +347,14 @@ def convert_m4a_to_wav(input_file):
     output_file = os.path.join(temp_dir, os.path.splitext(os.path.basename(input_file))[0] + ".wav")
 
     logger.info(f"Starting conversion: {input_file} -> {output_file}")
-    logger.debug(f"Generating ffmpeg command for conversion.")
+    logger.debug("Generating ffmpeg command for conversion.")
 
-    cmd = [
-        "ffmpeg",
-        "-i", input_file,
-        "-acodec", "pcm_s16le",
-        "-ar", "44100",
-        output_file,
-        "-y"
-    ]
+    cmd = ["ffmpeg", "-i", input_file, "-acodec", "pcm_s16le", "-ar", "44100", output_file, "-y"]
 
     logger.debug(f"Running command: {' '.join(cmd)}")
 
     try:
-        result = s.run(cmd, stdout=s.PIPE, stderr=s.PIPE, text=True)
+        result = s.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
             logger.error(f"ffmpeg error processing {input_file}: {result.stderr}")
@@ -369,7 +363,7 @@ def convert_m4a_to_wav(input_file):
         logger.info(f"Successfully converted {input_file} -> {output_file}")
         return output_file
 
-    except Exception as e:
+    except Exception:
         logger.exception(f"Exception occurred while converting {input_file}")
         return None
 
@@ -397,7 +391,7 @@ def process_mbid_from_files(
     database: Database,
     use_test_paths: bool = False,
     batch_size: int = 100,
-    limit: Optional[int] = None,
+    limit: int | None = None,
 ) -> dict:
     """
     Extract MusicBrainz IDs from audio files and update database.
@@ -423,34 +417,34 @@ def process_mbid_from_files(
             'skipped': bool - True if skipped due to config/environment issues
     """
     stats = {
-        'total': 0,
-        'accessible': 0,
-        'inaccessible': 0,
-        'extracted': 0,
-        'missing': 0,
-        'updated': 0,
-        'errors': 0,
-        'skipped': False,
+        "total": 0,
+        "accessible": 0,
+        "inaccessible": 0,
+        "extracted": 0,
+        "missing": 0,
+        "updated": 0,
+        "errors": 0,
+        "skipped": False,
     }
 
     # Validate environment first
     if not check_ffprobe_available():
         logger.warning("ffprobe not available - skipping MBID extraction from files")
-        stats['skipped'] = True
+        stats["skipped"] = True
         return stats
 
     path_validation = validate_path_mapping(use_test=use_test_paths)
-    if not path_validation['configured']:
+    if not path_validation["configured"]:
         logger.warning("Path mapping not configured - skipping MBID extraction from files")
-        stats['skipped'] = True
+        stats["skipped"] = True
         return stats
 
-    if not path_validation['accessible']:
+    if not path_validation["accessible"]:
         logger.warning(
             f"Music path not accessible: {path_validation['local_prefix']} - "
             "skipping MBID extraction from files"
         )
-        stats['skipped'] = True
+        stats["skipped"] = True
         return stats
 
     # Query tracks without MBIDs
@@ -471,7 +465,7 @@ def process_mbid_from_files(
         logger.info("No tracks without MBIDs found")
         return stats
 
-    stats['total'] = len(tracks)
+    stats["total"] = len(tracks)
     logger.info(f"Processing {stats['total']} tracks for MBID extraction")
 
     # Process each track
@@ -480,32 +474,32 @@ def process_mbid_from_files(
         local_path = map_plex_path_to_local(plex_path, use_test=use_test_paths)
 
         if not local_path or not verify_path_accessible(local_path):
-            stats['inaccessible'] += 1
+            stats["inaccessible"] += 1
             continue
 
-        stats['accessible'] += 1
+        stats["accessible"] += 1
 
         # Extract MBID from file
         track_info = ffmpeg_get_info(local_path)
         if not track_info:
-            stats['missing'] += 1
+            stats["missing"] += 1
             continue
 
         mbid = ffmpeg_get_mbtid(track_info)
         if not mbid:
-            stats['missing'] += 1
+            stats["missing"] += 1
             continue
 
-        stats['extracted'] += 1
+        stats["extracted"] += 1
 
         # Update database
         try:
             update_query = "UPDATE track_data SET musicbrainz_id = %s WHERE id = %s"
             database.execute_query(update_query, (mbid, track_id))
-            stats['updated'] += 1
+            stats["updated"] += 1
         except Exception as e:
             logger.error(f"Error updating track {track_id} with MBID {mbid}: {e}")
-            stats['errors'] += 1
+            stats["errors"] += 1
 
         # Progress logging
         if (i + 1) % batch_size == 0:
@@ -545,23 +539,23 @@ def process_artist_mbid_from_files(
             'skipped': bool - True if skipped due to config/environment issues
     """
     stats = {
-        'total': 0,
-        'extracted': 0,
-        'updated': 0,
-        'errors': 0,
-        'skipped': False,
+        "total": 0,
+        "extracted": 0,
+        "updated": 0,
+        "errors": 0,
+        "skipped": False,
     }
 
     # Validate environment first
     if not check_ffprobe_available():
         logger.warning("ffprobe not available - skipping artist MBID extraction from files")
-        stats['skipped'] = True
+        stats["skipped"] = True
         return stats
 
     path_validation = validate_path_mapping(use_test=use_test_paths)
-    if not path_validation['configured'] or not path_validation['accessible']:
+    if not path_validation["configured"] or not path_validation["accessible"]:
         logger.warning("Path mapping not configured/accessible - skipping artist MBID extraction")
-        stats['skipped'] = True
+        stats["skipped"] = True
         return stats
 
     # Query artists without MBIDs, with a sample track for each
@@ -581,7 +575,7 @@ def process_artist_mbid_from_files(
         logger.info("No artists without MBIDs found")
         return stats
 
-    stats['total'] = len(artists)
+    stats["total"] = len(artists)
     logger.info(f"Processing {stats['total']} artists for MBID extraction")
 
     for artist_id, artist_name, plex_path in artists:
@@ -600,17 +594,17 @@ def process_artist_mbid_from_files(
         if not artist_mbid:
             continue
 
-        stats['extracted'] += 1
+        stats["extracted"] += 1
 
         # Update database
         try:
             update_query = "UPDATE artists SET musicbrainz_id = %s WHERE id = %s"
             database.execute_query(update_query, (artist_mbid, artist_id))
-            stats['updated'] += 1
+            stats["updated"] += 1
             logger.debug(f"Updated artist '{artist_name}' with MBID {artist_mbid}")
         except Exception as e:
             logger.error(f"Error updating artist {artist_id} with MBID {artist_mbid}: {e}")
-            stats['errors'] += 1
+            stats["errors"] += 1
 
     logger.info(
         f"Artist MBID extraction complete: {stats['total']} artists, "

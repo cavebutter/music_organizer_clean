@@ -3,7 +3,6 @@ Tests to validate environment configuration is correct.
 
 Run these first to ensure all connections work before running pipeline tests.
 """
-import pytest
 
 
 class TestDatabaseConfig:
@@ -17,11 +16,10 @@ class TestDatabaseConfig:
     def test_sandbox_has_tables(self, db_test):
         """Verify sandbox has the expected tables."""
         result = db_test.execute_select_query(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'sandbox'"
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'sandbox'"
         )
         tables = {row[0] for row in result}
-        expected = {'track_data', 'artists', 'genres'}
+        expected = {"track_data", "artists", "genres"}
         assert expected.issubset(tables), f"Missing tables: {expected - tables}"
 
     def test_production_connection(self, db_prod):

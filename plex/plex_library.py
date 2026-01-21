@@ -1,16 +1,16 @@
-from . import (
-    PLEX_SERVER_NAME,
-    PLEX_MUSIC_LIBRARY,
-    PLEX_USER,
-    PLEX_PASSWORD,
-    PLEX_TEST_SERVER_NAME,
-    PLEX_TEST_LIBRARY,
-)
-from plexapi.myplex import MyPlexAccount
-from datetime import datetime
-import sys
 import csv
+import sys
+
 from loguru import logger
+from plexapi.myplex import MyPlexAccount
+
+from . import (
+    PLEX_PASSWORD,
+    PLEX_SERVER_NAME,
+    PLEX_TEST_SERVER_NAME,
+    PLEX_USER,
+)
+
 
 def plex_connect(test: bool = True):
     """
@@ -32,6 +32,7 @@ def plex_connect(test: bool = True):
         logger.error(f"Error connecting to Plex server {server_name}: {e}")
         sys.exit()
 
+
 def get_music_library(server, library):
     """
     Finds the music library in the provided Plex server.
@@ -41,7 +42,7 @@ def get_music_library(server, library):
     """
     try:
         music_library = server.library.section(library)
-        logger.debug(f"Retrieved Plex server music library")
+        logger.debug("Retrieved Plex server music library")
         return music_library
     except Exception as e:
         logger.error(f"Error retrieving music library: {e}")
@@ -62,6 +63,7 @@ def get_all_tracks(music_library):
     except Exception as e:
         logger.error(f"Error retrieving tracks from music library: {e}")
         sys.exit()
+
 
 def get_all_tracks_limit(music_library, limit=50):
     """
@@ -94,14 +96,14 @@ def extract_track_data(track, filepath_prefix: str):
     genre_list = []
     for genre in track.genres:
         genre_list.append(genre.tag)
-    added_date = track.addedAt.strftime('%Y-%m-%d')
+    added_date = track.addedAt.strftime("%Y-%m-%d")
     filepath = None
     for media in track.media:
         for part in media.parts:
             filepath = part.file
     logger.debug(f"Original location: {track.locations[0]}")
     logger.debug(f"Filepath prefix: {filepath_prefix}")
-    stripped_location = track.locations[0].replace(filepath_prefix, '')
+    stripped_location = track.locations[0].replace(filepath_prefix, "")
     logger.debug(f"Stripped location: {stripped_location}")
 
     # Use originalTitle for compilation tracks (contains actual track artist),
@@ -109,14 +111,14 @@ def extract_track_data(track, filepath_prefix: str):
     artist = track.originalTitle if track.originalTitle else track.artist().title
 
     track_data = {
-        'title': track.title,
-        'artist': artist,
-        'album': track.album().title,
-        'genre': genre_list,
-        'added_date': added_date,
-        'filepath': filepath,
-        'location': stripped_location,
-        'plex_id': int(track.ratingKey)
+        "title": track.title,
+        "artist": artist,
+        "album": track.album().title,
+        "genre": genre_list,
+        "added_date": added_date,
+        "filepath": filepath,
+        "location": stripped_location,
+        "plex_id": int(track.ratingKey),
     }
     return track_data
 
@@ -153,9 +155,17 @@ def export_track_data(track_data, filename):
     Returns:
     None
     """
-    with open(filename, 'a') as csvfile:
-        fieldnames = ['title', 'artist', 'album', 'genre', 'added_date', 'filepath',
-                      'location', 'plex_id']
+    with open(filename, "a") as csvfile:
+        fieldnames = [
+            "title",
+            "artist",
+            "album",
+            "genre",
+            "added_date",
+            "filepath",
+            "location",
+            "plex_id",
+        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for element in track_data:

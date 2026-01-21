@@ -1,5 +1,34 @@
 # Session Continuity - 2026-01-21
 
+## What Was Accomplished (Session 5)
+
+### Code Cleanup and Linting
+
+#### Dead Code Removed
+- `db/initial_load_pandas.py` - Unused WIP pandas ETL class (never imported)
+- `bpm_test.py` - Old test file using removed function
+- `process_bpm()` in `db/db_update.py` - Referenced undefined `bpm` module
+
+#### Ruff Linting Completed
+- 81 issues auto-fixed with `ruff check . --fix`
+- Manual fixes for remaining 10 issues:
+  - `analysis/ffmpeg.py`: Changed `stdout=PIPE, stderr=PIPE` to `capture_output=True` (3 locations)
+  - `analysis/ffmpeg.py`: Fixed unused loop variable `dirs` → `_dirs`
+  - `config/logging.py`: Added `# noqa: SIM115` for intentional open() without context manager
+  - `test/test_acousticbrainz.py`: Fixed unused loop variables
+  - `test/test_bpm_pipeline.py`: Fixed unused loop variable `key` → `_key`
+  - `test/test_e2e_pipeline.py`: Fixed unused loop variable `album` → `_album`
+- All ruff checks now pass
+
+#### Next Steps (In Progress)
+1. ~~Dead code cleanup~~ ✓
+2. ~~Ruff linting~~ ✓
+3. History integration into pipeline
+4. Implement incremental updates
+5. Create orchestration functions
+
+---
+
 ## What Was Accomplished (Session 4)
 
 ### E2E Test Run - Full Pipeline Validation

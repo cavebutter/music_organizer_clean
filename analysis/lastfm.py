@@ -1,10 +1,12 @@
-import os
-import requests
 import json
-from loguru import logger
+import os
+
+import requests
 from dotenv import load_dotenv
+from loguru import logger
+
+from db import DB_PASSWORD, DB_PATH, DB_USER, TEST_DB
 from db.database import Database
-from db import DB_PATH, DB_USER, DB_PASSWORD, DB_DATABASE, TEST_DB
 
 load_dotenv()
 
@@ -14,8 +16,9 @@ LASTFM_USERNAME = os.getenv("LASTFM_USERNAME", "")
 LASTFM_APP_NAME = os.getenv("LASTFM_APP_NAME", "")
 
 database = Database(DB_PATH, DB_USER, DB_PASSWORD, TEST_DB)  # Change to production db
-def get_artist_info(artist_name):
 
+
+def get_artist_info(artist_name):
     """
     Retrieves information about a specific artist from the Last.fm API.
 
@@ -25,7 +28,7 @@ def get_artist_info(artist_name):
     Returns:
     dict: A JSON object containing information about the artist if the request is successful, otherwise None.
     """
-    url = f'http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&autocorrect=1&artist={artist_name}&api_key={LASTFM_API_KEY}&format=json'
+    url = f"http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&autocorrect=1&artist={artist_name}&api_key={LASTFM_API_KEY}&format=json"
     response = requests.get(url)
     if response.status_code == 200:
         logger.debug(f"last_fm Response: {response.json()}")
@@ -49,12 +52,12 @@ def get_artist_mbid(result: dict | None) -> str | None:
     if result is None:
         return None
     try:
-        mbid = result['artist']['mbid']
-        artist_name = result['artist'].get('name', 'Unknown')
+        mbid = result["artist"]["mbid"]
+        artist_name = result["artist"].get("name", "Unknown")
         logger.info(f"Retrieved MBID for {artist_name}: {mbid}")
         return mbid
     except (KeyError, TypeError) as e:
-        artist_name = result.get('artist', {}).get('name', 'Unknown')
+        artist_name = result.get("artist", {}).get("name", "Unknown")
         logger.error(f"Failed to retrieve MBID for {artist_name}: {e}")
         return None
 
@@ -72,13 +75,13 @@ def get_artist_tags(result: dict | None) -> list[str]:
     if result is None:
         return []
     try:
-        tags = result['artist']['tags']['tag']
-        tag_list = [tag['name'] for tag in tags]
-        artist_name = result['artist'].get('name', 'Unknown')
+        tags = result["artist"]["tags"]["tag"]
+        tag_list = [tag["name"] for tag in tags]
+        artist_name = result["artist"].get("name", "Unknown")
         logger.info(f"Retrieved tags for {artist_name}: {tag_list}")
         return tag_list
     except (KeyError, TypeError) as e:
-        artist_name = result.get('artist', {}).get('name', 'Unknown')
+        artist_name = result.get("artist", {}).get("name", "Unknown")
         logger.error(f"Failed to retrieve tags for {artist_name}: {e}")
         return []
 
@@ -94,9 +97,9 @@ def get_similar_artists(result):
     """
     try:
         similar_artists = []
-        if 'artist' in result and 'similar' in result['artist']:
-            for artist in result['artist']['similar']['artist']:
-                similar_artists.append(artist['name'])
+        if "artist" in result and "similar" in result["artist"]:
+            for artist in result["artist"]["similar"]["artist"]:
+                similar_artists.append(artist["name"])
         return similar_artists
 
     except Exception as e:
@@ -107,6 +110,7 @@ def get_similar_artists(result):
     #     return [artist.get('name') for artist in similar_artists]
     # except (KeyError, AttributeError):
     #     return []
+
 
 def get_current_mbids_from_db(database: Database):
     """
@@ -169,15 +173,15 @@ def get_last_fm_track_data(
     """
     if mbid:
         url = (
-            f'http://ws.audioscrobbler.com/2.0/?method=track.getInfo'
-            f'&api_key={LASTFM_API_KEY}&mbid={mbid}&format=json'
+            f"http://ws.audioscrobbler.com/2.0/?method=track.getInfo"
+            f"&api_key={LASTFM_API_KEY}&mbid={mbid}&format=json"
         )
         lookup_desc = f"MBID {mbid}"
     elif artist and track:
         url = (
-            f'http://ws.audioscrobbler.com/2.0/?method=track.getInfo'
-            f'&api_key={LASTFM_API_KEY}&artist={artist}&track={track}'
-            f'&autocorrect=1&format=json'
+            f"http://ws.audioscrobbler.com/2.0/?method=track.getInfo"
+            f"&api_key={LASTFM_API_KEY}&artist={artist}&track={track}"
+            f"&autocorrect=1&format=json"
         )
         lookup_desc = f"{artist} - {track}"
     else:
@@ -188,16 +192,19 @@ def get_last_fm_track_data(
     if response.status_code == 200:
         result = response.json()
         # Check for API error response (e.g., track not found)
-        if 'error' in result:
-            logger.warning(f"Last.fm API error for {lookup_desc}: {result.get('message', 'Unknown error')}")
+        if "error" in result:
+            logger.warning(
+                f"Last.fm API error for {lookup_desc}: {result.get('message', 'Unknown error')}"
+            )
             return None
         logger.debug(f"last_fm Response: {result}")
         logger.info(f"Retrieved track info for {lookup_desc}")
         return result
     else:
-        logger.error(f"Failed to retrieve track info for {lookup_desc} (HTTP {response.status_code})")
+        logger.error(
+            f"Failed to retrieve track info for {lookup_desc} (HTTP {response.status_code})"
+        )
         return None
-
 
 
 def get_track_mbid(result: json):
@@ -211,7 +218,7 @@ def get_track_mbid(result: json):
     str: The MusicBrainz ID (MBID) of the track, or None if the MBID is not found.
     """
     try:
-        mbid = result['track']['mbid']
+        mbid = result["track"]["mbid"]
         logger.info(f"Retrieved MBID for {result['track']['name']}: {mbid}")
         return mbid
     except (KeyError, TypeError) as e:
@@ -230,8 +237,8 @@ def get_track_tags(result: json):
     list: A list of tags associated with the track, or an empty list if no tags are found.
     """
     try:
-        tags = result['track']['toptags']['tag']
-        tag_list = [tag['name'] for tag in tags]
+        tags = result["track"]["toptags"]["tag"]
+        tag_list = [tag["name"] for tag in tags]
         logger.info(f"Retrieved tags for {result['track']['name']}: {tag_list}")
         return tag_list
     except (KeyError, TypeError) as e:

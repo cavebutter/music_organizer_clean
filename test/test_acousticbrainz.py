@@ -3,9 +3,8 @@ Integration tests for AcousticBrainz BPM lookup.
 
 These tests hit the real AcousticBrainz API using MBIDs from the sandbox database.
 """
-import pytest
-from analysis.acousticbrainz import get_bpm_by_mbid, bulk_get_bpm, fetch_bpm_for_tracks
 
+from analysis.acousticbrainz import bulk_get_bpm, fetch_bpm_for_tracks, get_bpm_by_mbid
 
 # Known MBIDs from sandbox (The Smiths, Rush, XTC)
 KNOWN_MBIDS = {
@@ -59,7 +58,7 @@ class TestBulkGetBpm:
         mbids = list(KNOWN_MBIDS.keys())
         results = bulk_get_bpm(mbids)
 
-        for mbid, bpm in results.items():
+        for _mbid, bpm in results.items():
             assert isinstance(bpm, float)
             assert 60 <= bpm <= 200
 
@@ -92,7 +91,7 @@ class TestFetchBpmForTracks:
 
         assert isinstance(results, dict)
         # Track IDs should be keys, not MBIDs
-        for key in results.keys():
+        for key in results:
             assert isinstance(key, int)
 
     def test_fetch_empty_list(self):
