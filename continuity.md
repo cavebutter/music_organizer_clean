@@ -1,86 +1,103 @@
 # Session Continuity - 2026-01-21
 
-## What Was Accomplished (Sessions 2-3)
+## What Was Accomplished (Session 4)
+
+### E2E Test Run - Full Pipeline Validation
+**Duration:** 2 hours 24 minutes | **Result:** 44 passed, 2 skipped
+
+#### Pipeline Results Summary
+| Metric | Value |
+|--------|-------|
+| Total tracks | 1,557 |
+| Total artists | 336 |
+| Total genres | 120 |
+
+#### Coverage Metrics
+| Metric | Count | Percentage |
+|--------|-------|------------|
+| Tracks with MBID | 1,144 / 1,557 | 73.5% |
+| Artists with MBID | 94 / 336 | 28.0% |
+| Artists with genres | 96 / 336 | 28.6% |
+| Tracks with BPM | 1,556 / 1,557 | 99.9% |
+| Tracks with genres (direct) | 21 / 1,557 | 1.3% |
+
+#### BPM Sources
+| Source | Tracks |
+|--------|--------|
+| AcousticBrainz | 221 (19.3% hit rate) |
+| Essentia (local) | 1,335 |
+
+#### Relationship Tables
+| Table | Count |
+|-------|-------|
+| artist_genres | 472 links |
+| track_genres | 105 links |
+| similar_artists | 490 links |
+
+### Artist Breakdown Analysis
+- **112 artists** (33%) have tracks in the library
+- **224 artists** (67%) exist only as similar artist recommendations
+- Similar artists are intentionally not enriched to avoid infinite loops
+
+### Genre Inheritance Solution
+Added queries and views to `db/useful_queries.py` for genre inheritance:
+
+**Problem:** Only 1.3% of tracks have direct genre tags from Last.fm
+**Solution:** Inherit genres from artist when track has no genres
+**Result:** 96.7% of tracks now have genre access (1,505 / 1,557)
+
+#### New Queries
+- `TRACKS_WITH_EFFECTIVE_GENRES` - Flat result (one row per track-genre)
+- `TRACKS_WITH_EFFECTIVE_GENRES_GROUPED` - Grouped with comma-separated genres
+
+#### New Views
+- `v_track_effective_genres` - Flat view
+- `v_track_effective_genres_grouped` - Grouped view with BPM (useful for playlists)
+
+Example playlist query:
+```sql
+SELECT * FROM v_track_effective_genres_grouped
+WHERE genres LIKE '%rock%' AND bpm BETWEEN 120 AND 140
+```
+
+---
+
+## Previous Sessions (2-3) Summary
 
 ### Last.fm API Optimization
-- **Rate limiting increased 4x**: Changed from 1 req/s to 4 req/s (0.25s delay)
-- Last.fm allows ~5 req/s averaged over 5 minutes; we use 4 req/s for safety margin
-- Rate limit now configurable via `rate_limit_delay` parameter on both functions
-
-### MBID-First Track Lookup
-- `get_last_fm_track_data()` now accepts optional `mbid` parameter
-- Uses MBID for precise matching when available (from ffprobe Phase 4)
-- Falls back to artist+track lookup when no MBID
-- Handles API error responses gracefully
-
-### New Phase 6 Batch Processor
-- Added `process_lastfm_track_data()` in `db/db_update.py`
-- Progress logging with time estimates
-- `skip_with_genres` parameter to avoid re-processing tracks
-- Query includes existing MBID for precise lookups
+- Rate limiting increased 4x (0.25s delay, ~4 req/s)
+- MBID-first track lookup implemented
+- Phase 6 batch processor added
 
 ### Pipeline Reordering
-- **New order**: Last.fm (Phases 5, 6) runs BEFORE AcousticBrainz (Phase 7.1)
-- More MBIDs from Last.fm = higher AcousticBrainz hit rate
-- Phase 6 now marked as required (track-level genres are valuable)
+- New order: Last.fm (Phases 5, 6) → AcousticBrainz (Phase 7.1) → Essentia (Phase 7.2)
 
-### E2E Test Updates
-- Removed 20 artist limit for Last.fm enrichment
-- Added `lastfm_track_enriched_sandbox` fixture for Phase 6
-- Added `TestLastFmArtistEnrichment` class (5 tests)
-- Added `TestLastFmTrackEnrichment` class (4 tests)
-- Updated fixture chain: Last.fm before AcousticBrainz
-- Enhanced summary with genre relationship counts
-
-### Unit Test Updates
-- `test/test_lastfm.py` now has 28 tests (added 5 for MBID lookup)
-
-### Test Library Updated
-- User completed test library adjustments (smaller, different artists)
-- Production library restored after accidental deletions
-
-## Ready for Next Session
-
-### Run E2E Tests
-Test library is ready. Run e2e to verify the full pipeline:
-
-```bash
-pytest test/test_e2e_pipeline.py -v -s
-```
-
-### Expected Results
-- `genres` table populated from Last.fm artist tags
-- `artist_genres` table with relationships
-- `track_genres` table from Phase 6
-- Higher artist MBID coverage (from Last.fm)
-- Higher track MBID coverage (from Last.fm)
-- `similar_artists` relationships
-
-## Pending Commit
-
-Changes staged but not yet committed:
-- `test/test_e2e_pipeline.py` - Phase 5/6 tests, fixture reordering
-- `continuity.md` - Session notes
-- `.gitignore` - Exclude utility script
-
-Commit message ready:
-```
-test: add Phase 5 and Phase 6 Last.fm e2e tests
-```
+---
 
 ## Key Functions
 
 | Function | Location | Description |
 |----------|----------|-------------|
-| `insert_last_fm_artist_data()` | `db/db_update.py` | Phase 5: Artist enrichment (4 req/s) |
-| `process_lastfm_track_data()` | `db/db_update.py` | Phase 6: Track enrichment batch processor |
+| `insert_last_fm_artist_data()` | `db/db_update.py` | Phase 5: Artist enrichment |
+| `process_lastfm_track_data()` | `db/db_update.py` | Phase 6: Track enrichment |
 | `get_last_fm_track_data()` | `analysis/lastfm.py` | MBID-first track lookup |
+| `process_bpm_acousticbrainz()` | `db/db_update.py` | Phase 7.1: API BPM lookup |
+| `process_bpm_essentia()` | `db/db_update.py` | Phase 7.2: Local BPM analysis |
 
-## Resume Prompt
+## Pending Commit
 
-Test library is ready. Run e2e tests:
-```bash
-pytest test/test_e2e_pipeline.py -v -s
-```
+Files modified:
+- `db/useful_queries.py` - Genre inheritance queries and views
 
-Expecting to see genre tables populated, MBID coverage from Last.fm, and relationship tables (artist_genres, track_genres, similar_artists) with data.
+## Design Decisions Documented
+
+### Why similar artists aren't enriched
+Running `insert_last_fm_artist_data()` on all artists would create an infinite loop:
+1. Process artist → add 5 similar artists
+2. Process those 5 → add 25 more similar artists
+3. Repeat forever
+
+Current design: Similar artists exist for discovery/recommendations only, not as enriched entities.
+
+### Genre inheritance rationale
+Last.fm rarely returns track-level tags (1.3% coverage). Artist-level tags are much more reliable (28.6% of artists have tags). Inheriting artist genres for tracks without their own provides 96.7% effective genre coverage.
