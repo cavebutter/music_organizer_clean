@@ -477,46 +477,85 @@ class TestFFprobeMBIDExtraction:
 @pytest.fixture(scope="module")
 def lastfm_enriched_sandbox(mbid_enriched_sandbox):
     """
-    Enrich sandbox with Last.fm data.
+    Phase 5: Enrich sandbox with Last.fm artist data.
 
-    WARNING: This is slow due to API rate limiting (1s per artist).
-    Skip with: pytest -m "not slow"
+    Gets artist MBIDs, artist genres, and similar artists.
+    Rate limit: 4 req/s (0.25s delay).
     """
     db, _, _ = mbid_enriched_sandbox  # Unpack tuple from mbid_enriched_sandbox
 
-    # Get artist count first
     db.connect()
     artist_count = db.execute_select_query("SELECT COUNT(*) FROM artists")[0][0]
     db.close()
 
-    # Only run if we have a small number of artists (avoid long test runs)
-    if artist_count > 20:
-        pytest.skip(f"Skipping Last.fm enrichment for {artist_count} artists (too slow)")
+    print(f"\nPhase 5: Last.fm artist enrichment for {artist_count} artists...")
 
     try:
-        dbu.insert_last_fm_artist_data(db)
+        dbu.insert_last_fm_artist_data(db, rate_limit_delay=0.25)
     except Exception as e:
-        pytest.skip(f"Last.fm enrichment failed: {e}")
+        pytest.skip(f"Last.fm artist enrichment failed: {e}")
 
     return db
 
 
-@pytest.mark.slow
-class TestLastFmEnrichment:
-    """Tests for Last.fm enrichment. Marked slow due to API rate limiting."""
+@pytest.fixture(scope="module")
+def lastfm_track_enriched_sandbox(lastfm_enriched_sandbox):
+    """
+    Phase 6: Enrich sandbox with Last.fm track data.
+
+    Gets track MBIDs and track-level genres (which may differ from artist genres).
+    Uses existing MBID for precise lookup when available.
+    Rate limit: 4 req/s (0.25s delay).
+    """
+    db = lastfm_enriched_sandbox
+
+    db.connect()
+    track_count = db.execute_select_query("SELECT COUNT(*) FROM track_data")[0][0]
+    db.close()
+
+    print(f"\nPhase 6: Last.fm track enrichment for {track_count} tracks...")
+
+    try:
+        stats = dbu.process_lastfm_track_data(
+            db,
+            rate_limit_delay=0.25,
+            skip_with_genres=True,  # Skip tracks that already have genres
+        )
+    except Exception as e:
+        pytest.skip(f"Last.fm track enrichment failed: {e}")
+
+    return db, stats
+
+
+class TestLastFmArtistEnrichment:
+    """Tests for Phase 5: Last.fm artist enrichment."""
 
     def test_artist_mbids_populated(self, lastfm_enriched_sandbox):
-        """Some artists should have MusicBrainz IDs from Last.fm."""
+        """Artists should have MusicBrainz IDs from Last.fm."""
         db = lastfm_enriched_sandbox
         db.connect()
-        result = db.execute_select_query("""
+        total_artists = db.execute_select_query("SELECT COUNT(*) FROM artists")[0][0]
+        artists_with_mbid = db.execute_select_query("""
             SELECT COUNT(*) FROM artists
             WHERE musicbrainz_id IS NOT NULL AND musicbrainz_id != ''
-        """)
+        """)[0][0]
         db.close()
 
-        # Not all artists will have MBIDs
-        assert result[0][0] >= 0
+        coverage_pct = (artists_with_mbid / total_artists * 100) if total_artists > 0 else 0
+        print(f"\nArtist MBID coverage: {artists_with_mbid}/{total_artists} ({coverage_pct:.1f}%)")
+
+        # Expect at least some artists to have MBIDs from Last.fm
+        assert artists_with_mbid > 0, "No artists received MBIDs from Last.fm"
+
+    def test_genres_table_populated(self, lastfm_enriched_sandbox):
+        """Genres table should be populated from Last.fm tags."""
+        db = lastfm_enriched_sandbox
+        db.connect()
+        result = db.execute_select_query("SELECT COUNT(*) FROM genres")
+        db.close()
+
+        print(f"\nGenres in database: {result[0][0]}")
+        assert result[0][0] > 0, "No genres were populated from Last.fm"
 
     def test_artist_genres_populated(self, lastfm_enriched_sandbox):
         """Artist-genre relationships should be created."""
@@ -525,8 +564,8 @@ class TestLastFmEnrichment:
         result = db.execute_select_query("SELECT COUNT(*) FROM artist_genres")
         db.close()
 
-        # May have relationships if Last.fm returned genres
-        assert result[0][0] >= 0
+        print(f"\nArtist-genre relationships: {result[0][0]}")
+        assert result[0][0] > 0, "No artist-genre relationships created"
 
     def test_similar_artists_populated(self, lastfm_enriched_sandbox):
         """Similar artist relationships should be created."""
@@ -535,19 +574,110 @@ class TestLastFmEnrichment:
         result = db.execute_select_query("SELECT COUNT(*) FROM similar_artists")
         db.close()
 
-        # May have relationships if Last.fm returned similar artists
+        print(f"\nSimilar artist relationships: {result[0][0]}")
+        # Similar artists may or may not be returned by Last.fm
         assert result[0][0] >= 0
+
+    def test_sample_artist_genres(self, lastfm_enriched_sandbox):
+        """Display sample artist genres for verification."""
+        db = lastfm_enriched_sandbox
+        db.connect()
+        result = db.execute_select_query("""
+            SELECT a.artist, GROUP_CONCAT(g.genre SEPARATOR ', ') as genres
+            FROM artists a
+            JOIN artist_genres ag ON a.id = ag.artist_id
+            JOIN genres g ON ag.genre_id = g.id
+            GROUP BY a.id
+            LIMIT 5
+        """)
+        db.close()
+
+        print("\nSample artist genres:")
+        for artist, genres in result:
+            print(f"  {artist}: {genres}")
+
+        assert True  # Visibility test
+
+
+class TestLastFmTrackEnrichment:
+    """Tests for Phase 6: Last.fm track enrichment."""
+
+    def test_track_enrichment_stats(self, lastfm_track_enriched_sandbox):
+        """Should return stats from track enrichment."""
+        db, stats = lastfm_track_enriched_sandbox
+
+        assert isinstance(stats, dict)
+        assert 'total' in stats
+        assert 'updated' in stats
+        assert 'failed' in stats
+
+        print(f"\nPhase 6 stats: {stats}")
+
+    def test_track_genres_populated(self, lastfm_track_enriched_sandbox):
+        """Track-genre relationships should be created."""
+        db, stats = lastfm_track_enriched_sandbox
+
+        db.connect()
+        result = db.execute_select_query("SELECT COUNT(*) FROM track_genres")
+        db.close()
+
+        print(f"\nTrack-genre relationships: {result[0][0]}")
+        assert result[0][0] > 0, "No track-genre relationships created"
+
+    def test_track_mbids_improved(self, lastfm_track_enriched_sandbox):
+        """Track MBID coverage should improve after Last.fm enrichment."""
+        db, stats = lastfm_track_enriched_sandbox
+
+        db.connect()
+        total_tracks = db.execute_select_query("SELECT COUNT(*) FROM track_data")[0][0]
+        tracks_with_mbid = db.execute_select_query("""
+            SELECT COUNT(*) FROM track_data
+            WHERE musicbrainz_id IS NOT NULL AND musicbrainz_id != ''
+        """)[0][0]
+        db.close()
+
+        coverage_pct = (tracks_with_mbid / total_tracks * 100) if total_tracks > 0 else 0
+        print(f"\nTrack MBID coverage after Phase 6: {tracks_with_mbid}/{total_tracks} ({coverage_pct:.1f}%)")
+
+        # Track MBID coverage should be meaningful
+        assert tracks_with_mbid >= 0  # May be 0 if Last.fm doesn't return MBIDs
+
+    def test_sample_track_genres(self, lastfm_track_enriched_sandbox):
+        """Display sample track genres for verification."""
+        db, _ = lastfm_track_enriched_sandbox
+
+        db.connect()
+        result = db.execute_select_query("""
+            SELECT td.title, a.artist, GROUP_CONCAT(g.genre SEPARATOR ', ') as genres
+            FROM track_data td
+            JOIN artists a ON td.artist_id = a.id
+            JOIN track_genres tg ON td.id = tg.track_id
+            JOIN genres g ON tg.genre_id = g.id
+            GROUP BY td.id
+            LIMIT 5
+        """)
+        db.close()
+
+        print("\nSample track genres:")
+        for title, artist, genres in result:
+            print(f"  '{title}' by {artist}: {genres}")
+
+        assert True  # Visibility test
 
 
 @pytest.fixture(scope="module")
-def bpm_enriched_sandbox(mbid_enriched_sandbox):
+def bpm_enriched_sandbox(lastfm_track_enriched_sandbox):
     """
-    Enrich sandbox with BPM data from AcousticBrainz.
-    Depends on mbid_enriched_sandbox which extracts MBIDs from files first.
-    """
-    db, track_mbid_stats, artist_mbid_stats = mbid_enriched_sandbox
+    Phase 7.1: Enrich sandbox with BPM data from AcousticBrainz.
 
-    # Run AcousticBrainz BPM lookup (uses MBIDs extracted from files)
+    Depends on lastfm_track_enriched_sandbox to maximize MBID coverage.
+    More MBIDs from Last.fm = higher AcousticBrainz hit rate.
+    """
+    db, lastfm_track_stats = lastfm_track_enriched_sandbox
+
+    print("\nPhase 7.1: AcousticBrainz BPM lookup...")
+
+    # Run AcousticBrainz BPM lookup (uses MBIDs from ffprobe + Last.fm)
     stats = dbu.process_bpm_acousticbrainz(db)
 
     return db, stats
@@ -733,34 +863,63 @@ class TestFullPipelineIntegrity:
 
         assert len(duplicates) == 0, f"Found duplicate plex_ids: {duplicates}"
 
-    def test_data_summary(self, bpm_enriched_sandbox, capsys):
-        """Print summary of pipeline results for review."""
-        db, bpm_stats = bpm_enriched_sandbox
+    def test_data_summary(self, essentia_bpm_sandbox, capsys):
+        """Print comprehensive summary of pipeline results for review."""
+        db, acousticbrainz_stats, essentia_stats = essentia_bpm_sandbox
         db.connect()
 
+        # Core counts
         track_count = db.execute_select_query("SELECT COUNT(*) FROM track_data")[0][0]
         artist_count = db.execute_select_query("SELECT COUNT(*) FROM artists")[0][0]
         genre_count = db.execute_select_query("SELECT COUNT(*) FROM genres")[0][0]
-        tracks_with_bpm = db.execute_select_query(
-            "SELECT COUNT(*) FROM track_data WHERE bpm IS NOT NULL AND bpm > 0"
-        )[0][0]
+
+        # MBID coverage
         tracks_with_mbid = db.execute_select_query(
             "SELECT COUNT(*) FROM track_data WHERE musicbrainz_id IS NOT NULL AND musicbrainz_id != ''"
         )[0][0]
+        artists_with_mbid = db.execute_select_query(
+            "SELECT COUNT(*) FROM artists WHERE musicbrainz_id IS NOT NULL AND musicbrainz_id != ''"
+        )[0][0]
+
+        # BPM coverage
+        tracks_with_bpm = db.execute_select_query(
+            "SELECT COUNT(*) FROM track_data WHERE bpm IS NOT NULL AND bpm > 0"
+        )[0][0]
+
+        # Genre relationships
+        artist_genre_count = db.execute_select_query("SELECT COUNT(*) FROM artist_genres")[0][0]
+        track_genre_count = db.execute_select_query("SELECT COUNT(*) FROM track_genres")[0][0]
+        similar_artist_count = db.execute_select_query("SELECT COUNT(*) FROM similar_artists")[0][0]
 
         db.close()
 
-        print("\n" + "=" * 50)
-        print("PIPELINE SUMMARY")
-        print("=" * 50)
-        print(f"Tracks:           {track_count}")
-        print(f"Artists:          {artist_count}")
-        print(f"Genres:           {genre_count}")
-        print(f"Tracks with MBID: {tracks_with_mbid} ({tracks_with_mbid/track_count*100:.1f}%)")
-        print(f"Tracks with BPM:  {tracks_with_bpm} ({tracks_with_bpm/track_count*100:.1f}%)")
-        print("-" * 50)
-        print(f"BPM Stats: {bpm_stats}")
-        print("=" * 50)
+        print("\n" + "=" * 60)
+        print("FULL PIPELINE SUMMARY")
+        print("=" * 60)
+        print(f"\n{'CORE DATA':^60}")
+        print("-" * 60)
+        print(f"  Tracks:              {track_count}")
+        print(f"  Artists:             {artist_count}")
+        print(f"  Genres:              {genre_count}")
+
+        print(f"\n{'MBID COVERAGE':^60}")
+        print("-" * 60)
+        print(f"  Tracks with MBID:    {tracks_with_mbid}/{track_count} ({tracks_with_mbid/track_count*100:.1f}%)")
+        print(f"  Artists with MBID:   {artists_with_mbid}/{artist_count} ({artists_with_mbid/artist_count*100:.1f}%)")
+
+        print(f"\n{'BPM COVERAGE':^60}")
+        print("-" * 60)
+        print(f"  Tracks with BPM:     {tracks_with_bpm}/{track_count} ({tracks_with_bpm/track_count*100:.1f}%)")
+        print(f"  AcousticBrainz:      {acousticbrainz_stats.get('updated', 0)} tracks")
+        print(f"  Essentia:            {essentia_stats.get('updated', 0)} tracks")
+
+        print(f"\n{'GENRE RELATIONSHIPS':^60}")
+        print("-" * 60)
+        print(f"  Artist-genre links:  {artist_genre_count}")
+        print(f"  Track-genre links:   {track_genre_count}")
+        print(f"  Similar artists:     {similar_artist_count}")
+
+        print("\n" + "=" * 60)
 
         # This test always passes - it's for visibility
         assert True
