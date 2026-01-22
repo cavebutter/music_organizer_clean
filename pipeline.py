@@ -18,6 +18,7 @@ from analysis.ffmpeg import (
     validate_path_mapping,
 )
 from db.database import Database
+from db.db_functions import add_acoustid_column
 from plex.plex_library import (
     export_track_data,
     get_all_tracks,
@@ -251,6 +252,9 @@ def run_incremental_update(
         dbu.insert_genres_if_not_exists(database, genre_list)
         dbu.populate_track_genre_table(database)
 
+    # Ensure acoustid column exists (migration is idempotent)
+    add_acoustid_column(database)
+
     # MBID extraction (processes tracks without MBID)
     if not skip_ffprobe:
         logger.info("Running MBID extraction from files...")
@@ -380,6 +384,9 @@ def run_full_pipeline(
     if genre_list:
         dbu.insert_genres_if_not_exists(database, genre_list)
         dbu.populate_track_genre_table(database)
+
+    # Ensure acoustid column exists (migration is idempotent)
+    add_acoustid_column(database)
 
     # MBID extraction
     if not skip_ffprobe:

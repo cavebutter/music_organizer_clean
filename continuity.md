@@ -105,6 +105,7 @@ Extended metadata refresh to also extract and store AcousticID from files. Picar
 
 **Migration function** (`db/db_functions.py`):
 - `add_acoustid_column()` - Adds `acoustid VARCHAR(255)` column to track_data (idempotent)
+- Called automatically in `run_full_pipeline()` and `run_incremental_update()`
 
 **Updated functions**:
 - `get_tracks_by_artist_name()` - Now returns 7-tuple including acoustid
