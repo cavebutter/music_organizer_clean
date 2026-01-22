@@ -185,140 +185,349 @@ def check_tags_and_insert(database: Database, lastfm_json: json, genre_list: lis
     database.close()
 
 
-def insert_last_fm_artist_data(database: Database, rate_limit_delay: float = 0.25):
-    """
-    Enrich artist data from Last.fm API.
+def _process_artist_mbid_and_genres(
+    database: Database,
+    artist_id: int,
+    artist_name: str,
+    artist_info: dict,
+) -> dict:
+    """Process MBID and genres for a single artist (internal helper).
 
-    Fetches MBIDs, genres, and similar artists for all artists in the database.
+    Args:
+        database: Database connection (must already be connected)
+        artist_id: Artist ID in database
+        artist_name: Artist name for logging
+        artist_info: Last.fm API response for artist
+
+    Returns:
+        dict with 'mbid_updated' (bool) and 'genres_added' (int)
+    """
+    result = {"mbid_updated": False, "genres_added": 0}
+
+    # Update MusicBrainz ID if available
+    mbid = lastfm.get_artist_mbid(artist_info)
+    if mbid:
+        logger.debug(f"MBID for {artist_name}: {mbid}")
+        database.execute_query(
+            "UPDATE artists SET musicbrainz_id = %s WHERE id = %s", (mbid, artist_id)
+        )
+        result["mbid_updated"] = True
+
+    # Process genres
+    genres = lastfm.get_artist_tags(artist_info)
+    for genre in genres:
+        genre = genre.lower()
+        try:
+            # Insert genre if not exists using WHERE NOT EXISTS
+            database.execute_query(
+                """
+                INSERT INTO genres (genre)
+                SELECT %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM genres
+                    WHERE LOWER(genre) = LOWER(%s)
+                )
+            """,
+                (genre, genre),
+            )
+
+            # Get genre ID
+            genre_id = database.execute_select_query(
+                "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)", (genre,)
+            )[0][0]
+
+            # Insert genre relationship if not exists
+            database.execute_query(
+                """
+                INSERT INTO artist_genres (artist_id, genre_id)
+                SELECT %s, %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM artist_genres
+                    WHERE artist_id = %s AND genre_id = %s
+                )
+            """,
+                (artist_id, genre_id, artist_id, genre_id),
+            )
+
+            result["genres_added"] += 1
+            logger.debug(f"Processed genre for {artist_name}: {genre}")
+        except Exception as e:
+            logger.error(f"Error processing genre {genre} for {artist_name}: {e}")
+
+    return result
+
+
+def _process_similar_artists(
+    database: Database,
+    artist_id: int,
+    artist_name: str,
+    artist_info: dict,
+) -> int:
+    """Process similar artists for a single artist (internal helper).
+
+    Args:
+        database: Database connection (must already be connected)
+        artist_id: Artist ID in database
+        artist_name: Artist name for logging
+        artist_info: Last.fm API response for artist
+
+    Returns:
+        Number of similar artists added
+    """
+    similar_artists = lastfm.get_similar_artists(artist_info)
+    logger.debug(f"Similar artists for {artist_name}: {similar_artists}")
+
+    added = 0
+    for similar_artist in similar_artists:
+        if not similar_artist:
+            continue
+
+        try:
+            # Insert similar artist if not exists
+            database.execute_query(
+                """
+                INSERT INTO artists (artist)
+                SELECT %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM artists
+                    WHERE LOWER(artist) = LOWER(%s)
+                )
+            """,
+                (similar_artist, similar_artist),
+            )
+
+            # Get similar artist ID
+            similar_artist_id = database.execute_select_query(
+                "SELECT id FROM artists WHERE LOWER(artist) = LOWER(%s)",
+                (similar_artist,),
+            )[0][0]
+
+            # Insert similar artist relationship if not exists
+            database.execute_query(
+                """
+                INSERT INTO similar_artists (artist_id, similar_artist_id)
+                SELECT %s, %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM similar_artists
+                    WHERE artist_id = %s AND similar_artist_id = %s
+                )
+            """,
+                (artist_id, similar_artist_id, artist_id, similar_artist_id),
+            )
+
+            added += 1
+            logger.debug(f"Processed similar artist: {artist_name} -> {similar_artist}")
+        except Exception as e:
+            logger.error(f"Error processing similar artist {similar_artist} for {artist_name}: {e}")
+
+    return added
+
+
+def enrich_artists_core(
+    database: Database,
+    artist_ids: list[int] | None = None,
+    rate_limit_delay: float = 0.25,
+) -> dict:
+    """Enrich artists with MBID and genres only. Does NOT fetch similar artists.
+
+    Use this for stub artists (added via similar_artists) to complete their data
+    without expanding the artist graph.
 
     Args:
         database: Database connection object
+        artist_ids: Optional list of artist IDs to process. If None, processes all.
         rate_limit_delay: Seconds between API calls. Default 0.25 (4 req/s).
-            Last.fm allows ~5 req/s averaged over 5 minutes.
+
+    Returns:
+        dict with stats: {'total': int, 'processed': int, 'mbid_updated': int, 'genres_added': int, 'failed': int}
     """
-    logger.debug("Starting to insert Last.fm data into db.")
+    stats = {
+        "total": 0,
+        "processed": 0,
+        "mbid_updated": 0,
+        "genres_added": 0,
+        "failed": 0,
+    }
+
+    logger.info("Starting core artist enrichment (MBID + genres only)")
     logger.info(f"Rate limit delay: {rate_limit_delay}s ({1 / rate_limit_delay:.1f} req/s)")
     database.connect()
 
     try:
-        artists = database.execute_select_query("SELECT id, artist FROM artists")
+        # Build query based on whether artist_ids is provided
+        if artist_ids is not None:
+            if not artist_ids:  # Empty list = nothing to process
+                logger.info("No artists to enrich (empty list)")
+                database.close()
+                return stats
+            placeholders = ",".join(["%s"] * len(artist_ids))
+            query = f"SELECT id, artist FROM artists WHERE id IN ({placeholders})"
+            artists = database.execute_select_query(query, tuple(artist_ids))
+        else:
+            artists = database.execute_select_query("SELECT id, artist FROM artists")
 
-        for artist_id, artist_name in artists:
+        stats["total"] = len(artists)
+        logger.info(f"Found {stats['total']} artists to enrich (core)")
+
+        for i, (artist_id, artist_name) in enumerate(artists):
             try:
-                sleep(rate_limit_delay)  # Rate limiting
+                if i > 0:
+                    sleep(rate_limit_delay)
+
                 artist_info = lastfm.get_artist_info(artist_name)
                 if not artist_info:
-                    logger.error(f"Failed to retrieve artist info for {artist_name}")
+                    logger.warning(f"Failed to retrieve artist info for {artist_name}")
+                    stats["failed"] += 1
                     continue
 
-                # Update MusicBrainz ID if available
-                mbid = lastfm.get_artist_mbid(artist_info)
-                if mbid:
-                    logger.debug(f"MBID for {artist_name}: {mbid}")
-                    database.execute_query(
-                        "UPDATE artists SET musicbrainz_id = %s WHERE id = %s", (mbid, artist_id)
+                result = _process_artist_mbid_and_genres(
+                    database, artist_id, artist_name, artist_info
+                )
+
+                stats["processed"] += 1
+                if result["mbid_updated"]:
+                    stats["mbid_updated"] += 1
+                stats["genres_added"] += result["genres_added"]
+
+                if (i + 1) % 50 == 0:
+                    logger.info(
+                        f"Core enrichment progress: {i + 1}/{stats['total']} artists, "
+                        f"{stats['mbid_updated']} MBIDs, {stats['genres_added']} genres"
                     )
-
-                # Process genres
-                genres = lastfm.get_artist_tags(artist_info)
-                for genre in genres:
-                    genre = genre.lower()
-                    try:
-                        # Insert genre if not exists using WHERE NOT EXISTS
-                        database.execute_query(
-                            """
-                            INSERT INTO genres (genre)
-                            SELECT %s
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM genres 
-                                WHERE LOWER(genre) = LOWER(%s)
-                            )
-                        """,
-                            (genre, genre),
-                        )
-
-                        # Get genre ID
-                        genre_id = database.execute_select_query(
-                            "SELECT id FROM genres WHERE LOWER(genre) = LOWER(%s)", (genre,)
-                        )[0][0]
-
-                        # Insert genre relationship if not exists
-                        database.execute_query(
-                            """
-                            INSERT INTO artist_genres (artist_id, genre_id)
-                            SELECT %s, %s
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM artist_genres
-                                WHERE artist_id = %s AND genre_id = %s
-                            )
-                        """,
-                            (artist_id, genre_id, artist_id, genre_id),
-                        )
-
-                        logger.info(f"Processed genre for {artist_name}: {genre}")
-                    except Exception as e:
-                        logger.error(f"Error processing genre {genre} for {artist_name}: {e}")
-                        continue
-
-                # Process similar artists
-                similar_artists = lastfm.get_similar_artists(artist_info)
-                logger.debug(f"Similar artists for {artist_name}: {similar_artists}")
-
-                for similar_artist in similar_artists:
-                    if not similar_artist:
-                        continue
-
-                    try:
-                        # Insert similar artist if not exists
-                        database.execute_query(
-                            """
-                            INSERT INTO artists (artist)
-                            SELECT %s
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM artists 
-                                WHERE LOWER(artist) = LOWER(%s)
-                            )
-                        """,
-                            (similar_artist, similar_artist),
-                        )
-
-                        # Get similar artist ID
-                        similar_artist_id = database.execute_select_query(
-                            "SELECT id FROM artists WHERE LOWER(artist) = LOWER(%s)",
-                            (similar_artist,),
-                        )[0][0]
-
-                        # Insert similar artist relationship if not exists
-                        database.execute_query(
-                            """
-                            INSERT INTO similar_artists (artist_id, similar_artist_id)
-                            SELECT %s, %s
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM similar_artists
-                                WHERE artist_id = %s AND similar_artist_id = %s
-                            )
-                        """,
-                            (artist_id, similar_artist_id, artist_id, similar_artist_id),
-                        )
-
-                        logger.info(f"Processed similar artist: {artist_name} -> {similar_artist}")
-                    except Exception as e:
-                        logger.error(
-                            f"Error processing similar artist {similar_artist} for {artist_name}: {e}"
-                        )
-                        continue
 
             except Exception as e:
                 logger.error(f"Error processing artist {artist_name}: {e}")
-                continue
+                stats["failed"] += 1
 
     except Exception as e:
-        logger.error(f"Error in Last.fm data insertion process: {e}")
-        raise e
+        logger.error(f"Error in core artist enrichment: {e}")
+        raise
     finally:
         database.close()
 
-    logger.debug("Finished inserting Last.fm data into db.")
+    logger.info(
+        f"Core enrichment complete: {stats['processed']} artists, "
+        f"{stats['mbid_updated']} MBIDs updated, {stats['genres_added']} genres added"
+    )
+    return stats
+
+
+def enrich_artists_full(
+    database: Database,
+    artist_ids: list[int] | None = None,
+    rate_limit_delay: float = 0.25,
+) -> dict:
+    """Enrich artists with MBID, genres, AND similar artists.
+
+    Use this for primary artists (have tracks in library). Creates new stub
+    artists in similar_artists table.
+
+    Args:
+        database: Database connection object
+        artist_ids: Optional list of artist IDs to process. If None, processes all.
+        rate_limit_delay: Seconds between API calls. Default 0.25 (4 req/s).
+
+    Returns:
+        dict with stats: {'total': int, 'processed': int, 'mbid_updated': int, 'genres_added': int, 'similar_added': int, 'failed': int}
+    """
+    stats = {
+        "total": 0,
+        "processed": 0,
+        "mbid_updated": 0,
+        "genres_added": 0,
+        "similar_added": 0,
+        "failed": 0,
+    }
+
+    logger.info("Starting full artist enrichment (MBID + genres + similar artists)")
+    logger.info(f"Rate limit delay: {rate_limit_delay}s ({1 / rate_limit_delay:.1f} req/s)")
+    database.connect()
+
+    try:
+        # Build query based on whether artist_ids is provided
+        if artist_ids is not None:
+            if not artist_ids:  # Empty list = nothing to process
+                logger.info("No artists to enrich (empty list)")
+                database.close()
+                return stats
+            placeholders = ",".join(["%s"] * len(artist_ids))
+            query = f"SELECT id, artist FROM artists WHERE id IN ({placeholders})"
+            artists = database.execute_select_query(query, tuple(artist_ids))
+        else:
+            artists = database.execute_select_query("SELECT id, artist FROM artists")
+
+        stats["total"] = len(artists)
+        logger.info(f"Found {stats['total']} artists to enrich (full)")
+
+        for i, (artist_id, artist_name) in enumerate(artists):
+            try:
+                if i > 0:
+                    sleep(rate_limit_delay)
+
+                artist_info = lastfm.get_artist_info(artist_name)
+                if not artist_info:
+                    logger.warning(f"Failed to retrieve artist info for {artist_name}")
+                    stats["failed"] += 1
+                    continue
+
+                # Process MBID and genres
+                result = _process_artist_mbid_and_genres(
+                    database, artist_id, artist_name, artist_info
+                )
+                stats["processed"] += 1
+                if result["mbid_updated"]:
+                    stats["mbid_updated"] += 1
+                stats["genres_added"] += result["genres_added"]
+
+                # Process similar artists
+                similar_count = _process_similar_artists(
+                    database, artist_id, artist_name, artist_info
+                )
+                stats["similar_added"] += similar_count
+
+                if (i + 1) % 50 == 0:
+                    logger.info(
+                        f"Full enrichment progress: {i + 1}/{stats['total']} artists, "
+                        f"{stats['mbid_updated']} MBIDs, {stats['similar_added']} similar"
+                    )
+
+            except Exception as e:
+                logger.error(f"Error processing artist {artist_name}: {e}")
+                stats["failed"] += 1
+
+    except Exception as e:
+        logger.error(f"Error in full artist enrichment: {e}")
+        raise
+    finally:
+        database.close()
+
+    logger.info(
+        f"Full enrichment complete: {stats['processed']} artists, "
+        f"{stats['mbid_updated']} MBIDs, {stats['genres_added']} genres, "
+        f"{stats['similar_added']} similar artists"
+    )
+    return stats
+
+
+def insert_last_fm_artist_data(
+    database: Database,
+    artist_ids: list[int] | None = None,
+    rate_limit_delay: float = 0.25,
+) -> dict:
+    """Legacy wrapper - calls enrich_artists_full() for all artists.
+
+    Maintained for backward compatibility.
+
+    Args:
+        database: Database connection object
+        artist_ids: Optional list of artist IDs to process. If None, processes all.
+        rate_limit_delay: Seconds between API calls. Default 0.25 (4 req/s).
+
+    Returns:
+        dict with stats from enrich_artists_full()
+    """
+    logger.debug("insert_last_fm_artist_data called - delegating to enrich_artists_full()")
+    return enrich_artists_full(database, artist_ids, rate_limit_delay)
 
 
 def insert_lastfm_track_data(

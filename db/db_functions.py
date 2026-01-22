@@ -178,3 +178,114 @@ def update_history(database: Database, import_size: int):
     INSERT INTO history (tx_date, records, latest_entry) VALUES (%s, %s, %s)
     """
     database.execute_query(query, (today, import_size, max_date))
+
+
+def get_primary_artists_without_similar(database: Database) -> list[tuple[int, str]]:
+    """Find artists with tracks but no outgoing similar_artists records.
+
+    These are "primary" artists (have tracks in the library) that need full
+    Last.fm enrichment including similar artist discovery.
+
+    Args:
+        database: Database connection object
+
+    Returns:
+        List of (artist_id, artist_name) tuples for artists needing enrichment
+    """
+    database.connect()
+    query = """
+        SELECT DISTINCT a.id, a.artist
+        FROM artists a
+        INNER JOIN track_data td ON a.id = td.artist_id
+        LEFT JOIN similar_artists sa ON a.id = sa.artist_id
+        WHERE sa.artist_id IS NULL
+    """
+    results = database.execute_select_query(query)
+    database.close()
+    return results
+
+
+def get_stub_artists_without_mbid(database: Database) -> list[tuple[int, str]]:
+    """Find artists without tracks and without MBID (stub artists needing core enrichment).
+
+    These are "stub" artists added via similar_artists relationships that need
+    MBID and genre enrichment, but should NOT have their similar artists fetched
+    (to prevent infinite graph expansion).
+
+    Args:
+        database: Database connection object
+
+    Returns:
+        List of (artist_id, artist_name) tuples for stub artists needing enrichment
+    """
+    database.connect()
+    query = """
+        SELECT a.id, a.artist
+        FROM artists a
+        LEFT JOIN track_data td ON a.id = td.artist_id
+        WHERE td.id IS NULL
+          AND a.musicbrainz_id IS NULL
+    """
+    results = database.execute_select_query(query)
+    database.close()
+    return results
+
+
+def get_tracks_by_artist_name(
+    database: Database,
+    artist_names: list[str],
+) -> list[tuple[int, str, str, str | None, int, str | None]]:
+    """Get all tracks for specified artists.
+
+    Args:
+        database: Database connection
+        artist_names: List of artist names to match (case-insensitive)
+
+    Returns:
+        List of (track_id, filepath, artist_name, track_mbid, artist_id, artist_mbid) tuples
+    """
+    if not artist_names:
+        return []
+
+    database.connect()
+    placeholders = ",".join(["%s"] * len(artist_names))
+    query = f"""
+        SELECT td.id, td.filepath, a.artist, td.musicbrainz_id, a.id, a.musicbrainz_id
+        FROM track_data td
+        INNER JOIN artists a ON td.artist_id = a.id
+        WHERE LOWER(a.artist) IN ({placeholders})
+          AND td.filepath IS NOT NULL AND td.filepath != ''
+    """
+    params = tuple(name.lower() for name in artist_names)
+    results = database.execute_select_query(query, params)
+    database.close()
+    return results
+
+
+def get_artist_names_found(
+    database: Database,
+    artist_names: list[str],
+) -> list[str]:
+    """Check which artist names exist in database (case-insensitive).
+
+    Args:
+        database: Database connection
+        artist_names: List of artist names to check
+
+    Returns:
+        List of artist names that were found (in their database casing)
+    """
+    if not artist_names:
+        return []
+
+    database.connect()
+    placeholders = ",".join(["%s"] * len(artist_names))
+    query = f"""
+        SELECT DISTINCT a.artist
+        FROM artists a
+        WHERE LOWER(a.artist) IN ({placeholders})
+    """
+    params = tuple(name.lower() for name in artist_names)
+    results = database.execute_select_query(query, params)
+    database.close()
+    return [r[0] for r in results]

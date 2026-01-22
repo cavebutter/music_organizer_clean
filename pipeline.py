@@ -14,6 +14,7 @@ import db.db_update as dbu
 from analysis.ffmpeg import (
     process_artist_mbid_from_files,
     process_mbid_from_files,
+    refresh_mbid_for_artists,
     validate_path_mapping,
 )
 from db.database import Database
@@ -202,6 +203,7 @@ def run_incremental_update(
         "new_artists": 0,
         "mbid_extraction": {},
         "lastfm_artist": {},
+        "lastfm_stub": {},
         "lastfm_track": {},
         "bpm_acousticbrainz": {},
         "bpm_essentia": {},
@@ -259,11 +261,35 @@ def run_incremental_update(
             database, use_test_paths=use_test_paths
         )
 
-    # Last.fm enrichment (processes artists without genres/similar)
+    # Last.fm enrichment - targeted processing to avoid re-processing all records
     if not skip_lastfm:
-        logger.info("Running Last.fm artist enrichment...")
-        dbu.insert_last_fm_artist_data(database, rate_limit_delay=rate_limit_delay)
+        # 1. Find primary artists needing full enrichment (have tracks, no similar_artists)
+        incomplete_primary = dbf.get_primary_artists_without_similar(database)
+        primary_ids = [a[0] for a in incomplete_primary]
+        logger.info(f"Found {len(primary_ids)} primary artists needing full enrichment")
 
+        # 2. Full enrichment for primary artists (MBID + genres + similar)
+        if primary_ids:
+            stats["lastfm_artist"] = dbu.enrich_artists_full(
+                database, artist_ids=primary_ids, rate_limit_delay=rate_limit_delay
+            )
+        else:
+            stats["lastfm_artist"] = {"total": 0, "processed": 0, "skipped": "no primary artists"}
+
+        # 3. Find stub artists needing core enrichment (no tracks, no MBID)
+        incomplete_stubs = dbf.get_stub_artists_without_mbid(database)
+        stub_ids = [a[0] for a in incomplete_stubs]
+        logger.info(f"Found {len(stub_ids)} stub artists needing core enrichment")
+
+        # 4. Core enrichment for stubs (MBID + genres only - no similar artists)
+        if stub_ids:
+            stats["lastfm_stub"] = dbu.enrich_artists_core(
+                database, artist_ids=stub_ids, rate_limit_delay=rate_limit_delay
+            )
+        else:
+            stats["lastfm_stub"] = {"total": 0, "processed": 0, "skipped": "no stub artists"}
+
+        # 5. Track enrichment (skip_with_genres=True already filters correctly)
         logger.info("Running Last.fm track enrichment...")
         stats["lastfm_track"] = dbu.process_lastfm_track_data(
             database,
@@ -346,9 +372,7 @@ def run_full_pipeline(
     dbf.populate_artist_id_column(database)
 
     database.connect()
-    stats["total_artists"] = database.execute_select_query(
-        "SELECT COUNT(*) FROM artists"
-    )[0][0]
+    stats["total_artists"] = database.execute_select_query("SELECT COUNT(*) FROM artists")[0][0]
     database.close()
 
     # Extract genres from tracks
@@ -395,5 +419,49 @@ def run_full_pipeline(
     # Record in history
     dbf.update_history(database, stats["total_tracks"])
     logger.info(f"Full pipeline complete. {stats['total_tracks']} tracks processed.")
+
+    return stats
+
+
+def refresh_metadata_for_artists(
+    database: Database,
+    artist_names: list[str],
+    use_test_paths: bool = True,
+    dry_run: bool = False,
+) -> dict:
+    """Refresh metadata for specific artists after Picard tagging.
+
+    Re-extracts MBIDs from files and updates database. Use after manually
+    tagging files with Picard.
+
+    Args:
+        database: Database connection
+        artist_names: List of artist names to refresh
+        use_test_paths: Use test path mapping
+        dry_run: If True, show what would change without updating
+
+    Returns:
+        dict with extraction stats
+    """
+    logger.info(f"{'[DRY RUN] ' if dry_run else ''}Refreshing metadata for artists: {artist_names}")
+
+    stats = refresh_mbid_for_artists(
+        database=database,
+        artist_names=artist_names,
+        use_test_paths=use_test_paths,
+        dry_run=dry_run,
+    )
+
+    if stats["skipped"]:
+        logger.warning("Metadata refresh was skipped due to environment issues")
+    elif stats["artists_found"] == 0:
+        logger.warning("No matching artists found in database")
+    else:
+        logger.info(
+            f"{'[DRY RUN] ' if dry_run else ''}Metadata refresh complete: "
+            f"{stats['artists_found']}/{stats['artists_requested']} artists found, "
+            f"{stats['tracks']['updated']} tracks updated, "
+            f"{stats['artist_mbids']['updated']} artist MBIDs updated"
+        )
 
     return stats

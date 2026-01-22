@@ -1,5 +1,174 @@
 # Session Continuity - 2026-01-21
 
+## What Was Accomplished (Session 7)
+
+### Metadata Refresh by Artist Feature
+
+Added ability to re-extract MBIDs from audio files for specific artists after manual tagging with MusicBrainz Picard.
+
+#### Problem Solved
+- Existing `process_mbid_from_files()` only processes tracks WITHOUT MBIDs
+- After Picard tagging, tracks may have new/updated MBIDs in file tags
+- No way to update database for specific artists without re-processing all files
+
+#### Solution: Targeted Metadata Refresh
+
+**New Query Functions** (`db/db_functions.py`):
+- `get_tracks_by_artist_name()` - Get all tracks for specified artists (case-insensitive)
+- `get_artist_names_found()` - Check which artists exist in database
+
+**New Refresh Function** (`analysis/ffmpeg.py`):
+- `refresh_mbid_for_artists()` - Re-extract MBIDs from files for specific artists
+  - Updates tracks even if they already have MBIDs (unlike `process_mbid_from_files`)
+  - Also updates artist MBIDs (one sample per artist)
+  - Supports dry-run mode for verification
+  - Returns detailed stats dict
+
+**Orchestration Function** (`pipeline.py`):
+- `refresh_metadata_for_artists()` - High-level function for refreshing metadata
+
+#### Usage Example
+```python
+from db.database import Database
+from pipeline import refresh_metadata_for_artists
+
+db = Database(...)
+
+# After running Picard on The Beatles and Pink Floyd albums:
+stats = refresh_metadata_for_artists(
+    database=db,
+    artist_names=["The Beatles", "Pink Floyd"],
+    use_test_paths=True,
+    dry_run=True,  # Preview first
+)
+
+print(f"Would update {stats['tracks']['updated']} tracks")
+
+# If looks good, run for real:
+stats = refresh_metadata_for_artists(
+    database=db,
+    artist_names=["The Beatles", "Pink Floyd"],
+    use_test_paths=True,
+    dry_run=False,
+)
+```
+
+#### Stats Dictionary Structure
+```python
+stats = {
+    "artists_requested": 3,
+    "artists_found": 2,
+    "artists_not_found": ["Unknown Artist"],
+    "tracks": {
+        "total": 45,
+        "accessible": 42,
+        "inaccessible": 3,
+        "extracted": 40,
+        "missing": 2,
+        "updated": 35,
+        "unchanged": 5,
+        "errors": 0,
+    },
+    "artist_mbids": {
+        "updated": 2,
+        "unchanged": 0,
+        "errors": 0,
+    },
+    "dry_run": False,
+}
+```
+
+#### Tests Added
+New test file: `test/test_metadata_refresh.py` with 14 tests:
+- `TestGetTracksByArtistName` - 5 tests (empty input, existing artist, case-insensitive, nonexistent, multiple)
+- `TestGetArtistNamesFound` - 3 tests
+- `TestRefreshMetadataForArtists` - 5 tests (stats structure, nonexistent artist, dry_run flag, empty list, dry_run doesn't modify)
+- `TestRefreshMetadataIntegration` - 1 integration test
+
+#### Test Results
+All 14 tests passed in 18.67s
+
+#### Files Modified
+| File | Changes |
+|------|---------|
+| `db/db_functions.py` | Added `get_tracks_by_artist_name()`, `get_artist_names_found()` |
+| `analysis/ffmpeg.py` | Added `refresh_mbid_for_artists()` |
+| `pipeline.py` | Added `refresh_metadata_for_artists()` orchestration, imported new function |
+| `test/test_metadata_refresh.py` | New test file with 14 tests |
+
+---
+
+## What Was Accomplished (Session 6)
+
+### Incremental Update Pipeline Redesign
+
+Fixed the design flaw where `insert_last_fm_artist_data()` and `process_lastfm_track_data()` processed ALL records every run, defeating the purpose of incremental updates.
+
+#### Problem Solved
+- Similar artists added as stubs never got MBID/genres (67% of artists incomplete)
+- Fetching similar artists for stub artists would cause infinite graph expansion
+
+#### Solution: Split Enrichment
+
+**New Query Functions** (`db/db_functions.py`):
+- `get_primary_artists_without_similar()` - Artists with tracks but no similar_artists records
+- `get_stub_artists_without_mbid()` - Artists without tracks and without MBID
+
+**Split Enrichment Functions** (`db/db_update.py`):
+- `enrich_artists_core()` - MBID + genres only (for stub artists - prevents infinite expansion)
+- `enrich_artists_full()` - MBID + genres + similar artists (for primary artists)
+- `insert_last_fm_artist_data()` - Legacy wrapper that calls `enrich_artists_full()`
+
+**Updated Pipeline Flow** (`pipeline.py`):
+```python
+# 1. Full enrichment for primary artists (have tracks, no similar_artists)
+primary_ids = get_primary_artists_without_similar(database)
+enrich_artists_full(database, artist_ids=primary_ids)
+
+# 2. Core enrichment for stubs (no tracks, no MBID) - safe, no expansion
+stub_ids = get_stub_artists_without_mbid(database)
+enrich_artists_core(database, artist_ids=stub_ids)
+
+# 3. Track enrichment (skip_with_genres=True already works correctly)
+process_lastfm_track_data(database, skip_with_genres=True)
+```
+
+#### Key Design Decisions
+- Detection: Use absence of `similar_artists` records to identify artists needing full enrichment
+- Stub artists get MBID/genres but NOT similar artists (prevents infinite loop)
+- Both functions support `artist_ids` parameter for targeted processing
+- Empty list `[]` returns immediately (0 artists), `None` processes all artists
+
+#### Tests Added
+New test file: `test/test_incremental_enrichment.py` with 17 tests:
+- `TestGetPrimaryArtistsWithoutSimilar` - 4 tests for query correctness
+- `TestGetStubArtistsWithoutMbid` - 4 tests for query correctness
+- `TestEnrichArtistsCore` - 3 tests (including integration test for no-similar-artists behavior)
+- `TestEnrichArtistsFull` - 3 tests (including integration test for similar-artists behavior)
+- `TestInsertLastFmArtistData` - 1 test for legacy wrapper
+- `TestIncrementalEnrichmentFlow` - 2 tests for complete flow
+
+#### Test Results
+- 14 passed, 1 skipped (artist not found in Last.fm), 2 deselected (integration tests)
+- Existing `test/test_incremental_update.py` tests: 9 passed, 1 skipped
+
+#### Files Modified
+| File | Changes |
+|------|---------|
+| `db/db_functions.py` | Added `get_primary_artists_without_similar()`, `get_stub_artists_without_mbid()` |
+| `db/db_update.py` | Split `insert_last_fm_artist_data()` into `enrich_artists_core()` and `enrich_artists_full()` |
+| `pipeline.py` | Updated `run_incremental_update()` with targeted enrichment, added `lastfm_stub` stats |
+| `test/test_incremental_enrichment.py` | New test file with 17 tests |
+
+#### Completed Tasks
+1. ~~Add query functions to identify incomplete artists~~ ✓
+2. ~~Split enrichment into core (MBID+genres) and full (MBID+genres+similar)~~ ✓
+3. ~~Update pipeline.py with targeted processing~~ ✓
+4. ~~Write comprehensive tests~~ ✓
+5. ~~Run tests against sandbox database~~ ✓
+
+---
+
 ## What Was Accomplished (Session 5)
 
 ### Code Cleanup and Linting
@@ -48,8 +217,15 @@
 4. ~~Implement incremental updates~~ ✓
 5. ~~Create orchestration functions~~ ✓
 
-#### Remaining Work (Low Priority)
-- Discogs integration (Phase 5.6) - additional genre source, not critical
+#### Bug Discovered During Testing (FIXED in Session 6)
+**Last.fm enrichment functions process ALL records, not just new ones**
+- ~~`insert_last_fm_artist_data()` in `db/db_update.py` - processes all artists~~
+- ~~`process_lastfm_track_data()` in `db/db_update.py` - processes all tracks~~
+- ✓ **Fixed**: Split enrichment functions now accept `artist_ids` parameter
+- ✓ **Fixed**: Pipeline uses queries to identify only incomplete artists
+
+#### Remaining Work
+- **LOW**: Discogs integration (Phase 5.6) - additional genre source
 
 ---
 
@@ -131,26 +307,42 @@ WHERE genres LIKE '%rock%' AND bpm BETWEEN 120 AND 140
 
 | Function | Location | Description |
 |----------|----------|-------------|
-| `insert_last_fm_artist_data()` | `db/db_update.py` | Phase 5: Artist enrichment |
+| `refresh_metadata_for_artists()` | `pipeline.py` | Re-extract MBIDs for specific artists (after Picard) |
+| `refresh_mbid_for_artists()` | `analysis/ffmpeg.py` | Low-level MBID refresh with dry-run support |
+| `get_tracks_by_artist_name()` | `db/db_functions.py` | Query: tracks by artist name (case-insensitive) |
+| `enrich_artists_core()` | `db/db_update.py` | MBID + genres only (for stub artists) |
+| `enrich_artists_full()` | `db/db_update.py` | MBID + genres + similar (for primary artists) |
+| `insert_last_fm_artist_data()` | `db/db_update.py` | Legacy wrapper → `enrich_artists_full()` |
 | `process_lastfm_track_data()` | `db/db_update.py` | Phase 6: Track enrichment |
 | `get_last_fm_track_data()` | `analysis/lastfm.py` | MBID-first track lookup |
+| `get_primary_artists_without_similar()` | `db/db_functions.py` | Query: primary artists needing enrichment |
+| `get_stub_artists_without_mbid()` | `db/db_functions.py` | Query: stub artists needing enrichment |
 | `process_bpm_acousticbrainz()` | `db/db_update.py` | Phase 7.1: API BPM lookup |
 | `process_bpm_essentia()` | `db/db_update.py` | Phase 7.2: Local BPM analysis |
 
 ## Pending Commit
 
-Files modified:
-- `db/useful_queries.py` - Genre inheritance queries and views
+Files modified (Session 7):
+- `db/db_functions.py` - Added `get_tracks_by_artist_name()`, `get_artist_names_found()`
+- `analysis/ffmpeg.py` - Added `refresh_mbid_for_artists()`
+- `pipeline.py` - Added `refresh_metadata_for_artists()` orchestration
+- `test/test_metadata_refresh.py` - New test file (14 tests)
+- `continuity.md` - Updated with Session 7 notes
 
 ## Design Decisions Documented
 
-### Why similar artists aren't enriched
-Running `insert_last_fm_artist_data()` on all artists would create an infinite loop:
-1. Process artist → add 5 similar artists
-2. Process those 5 → add 25 more similar artists
-3. Repeat forever
+### Split Enrichment Strategy (Session 6)
+The infinite loop risk comes from fetching similar artists, not from fetching MBID/genres.
 
-Current design: Similar artists exist for discovery/recommendations only, not as enriched entities.
+**Solution:** Split enrichment into two modes:
+- **Core enrichment** (`enrich_artists_core`): MBID + genres only - safe for any artist
+- **Full enrichment** (`enrich_artists_full`): MBID + genres + similar artists - only for primary artists
+
+**Detection logic:**
+- Primary artists (have tracks) → need full enrichment → detected by absence of `similar_artists` records
+- Stub artists (no tracks) → need core enrichment only → detected by absence of MBID
+
+This allows stub artists to get MBID/genres (improving data quality) without expanding the artist graph infinitely.
 
 ### Genre inheritance rationale
 Last.fm rarely returns track-level tags (1.3% coverage). Artist-level tags are much more reliable (28.6% of artists have tags). Inheriting artist genres for tracks without their own provides 96.7% effective genre coverage.
