@@ -144,6 +144,49 @@ def populate_artist_id_column(database: Database):
     logger.debug("Updated artist_id column in track_data table")
 
 
+def add_acoustid_column(database: Database) -> bool:
+    """Add acoustid column to track_data table.
+
+    AcousticID is a fingerprint-based identifier that Picard embeds when
+    it finds a match via acoustic fingerprinting. Storing this saves a step
+    if we later need fingerprint-based matching.
+
+    Args:
+        database: Database connection
+
+    Returns:
+        True if column was added, False if it already exists or error occurred
+    """
+    database.connect()
+
+    # Check if column already exists
+    check_query = """
+        SELECT COUNT(*)
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'track_data'
+          AND COLUMN_NAME = 'acoustid'
+    """
+    result = database.execute_select_query(check_query)
+
+    if result and result[0][0] > 0:
+        logger.info("acoustid column already exists in track_data")
+        database.close()
+        return False
+
+    # Add the column
+    try:
+        alter_query = "ALTER TABLE track_data ADD COLUMN acoustid VARCHAR(255)"
+        database.execute_query(alter_query)
+        logger.info("Added acoustid column to track_data table")
+        database.close()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to add acoustid column: {e}")
+        database.close()
+        return False
+
+
 def get_last_update_date(database: Database):
     """Get the date of the last pipeline run from history table."""
     database.connect()
@@ -234,7 +277,7 @@ def get_stub_artists_without_mbid(database: Database) -> list[tuple[int, str]]:
 def get_tracks_by_artist_name(
     database: Database,
     artist_names: list[str],
-) -> list[tuple[int, str, str, str | None, int, str | None]]:
+) -> list[tuple[int, str, str, str | None, int, str | None, str | None]]:
     """Get all tracks for specified artists.
 
     Args:
@@ -242,7 +285,7 @@ def get_tracks_by_artist_name(
         artist_names: List of artist names to match (case-insensitive)
 
     Returns:
-        List of (track_id, filepath, artist_name, track_mbid, artist_id, artist_mbid) tuples
+        List of (track_id, filepath, artist_name, track_mbid, artist_id, artist_mbid, acoustid) tuples
     """
     if not artist_names:
         return []
@@ -250,7 +293,7 @@ def get_tracks_by_artist_name(
     database.connect()
     placeholders = ",".join(["%s"] * len(artist_names))
     query = f"""
-        SELECT td.id, td.filepath, a.artist, td.musicbrainz_id, a.id, a.musicbrainz_id
+        SELECT td.id, td.filepath, a.artist, td.musicbrainz_id, a.id, a.musicbrainz_id, td.acoustid
         FROM track_data td
         INNER JOIN artists a ON td.artist_id = a.id
         WHERE LOWER(a.artist) IN ({placeholders})

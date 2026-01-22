@@ -237,6 +237,13 @@ ARTIST_NAME_TAGS = [
     "ALBUM_ARTIST",
 ]
 
+ACOUSTID_TAGS = [
+    "Acoustid Id",  # Picard's format
+    "ACOUSTID_ID",
+    "acoustid_id",
+    "Acoustid_Id",
+]
+
 
 def ffmpeg_get_info(filepath: str) -> dict | None:
     """
@@ -323,6 +330,27 @@ def ffmpeg_get_artist_name(track_info: dict) -> str | None:
         Artist name if found, None otherwise
     """
     return _get_tag_safe(track_info, ARTIST_NAME_TAGS)
+
+
+def ffmpeg_get_acoustid(track_info: dict) -> str | None:
+    """
+    Extract AcousticID from ffprobe output.
+
+    AcousticID is a fingerprint-based identifier that Picard embeds when
+    it finds a match via acoustic fingerprinting.
+
+    Args:
+        track_info: Dict from ffprobe JSON output
+
+    Returns:
+        AcousticID if found, None otherwise
+    """
+    acoustid = _get_tag_safe(track_info, ACOUSTID_TAGS)
+
+    if acoustid:
+        logger.debug(f"Found AcousticID: {acoustid}")
+
+    return acoustid
 
 
 def ffmpeg_get_track_artist_and_artist_mbid(track_info: dict) -> tuple[str | None, str | None]:
@@ -620,7 +648,7 @@ def refresh_mbid_for_artists(
     use_test_paths: bool = False,
     dry_run: bool = False,
 ) -> dict:
-    """Re-extract MBIDs from files for specific artists.
+    """Re-extract MBIDs and AcousticIDs from files for specific artists.
 
     Use after Picard has updated file tags. Unlike process_mbid_from_files(),
     this will update tracks even if they already have MBIDs.
@@ -634,7 +662,8 @@ def refresh_mbid_for_artists(
     Returns:
         dict with stats: artists_requested, artists_found, artists_not_found,
         tracks (total, accessible, inaccessible, extracted, missing, updated, unchanged, errors),
-        artist_mbids (updated, unchanged, errors), dry_run
+        artist_mbids (updated, unchanged, errors), acoustids (extracted, updated, unchanged, errors),
+        dry_run
     """
     from db.db_functions import get_artist_names_found, get_tracks_by_artist_name
 
@@ -653,6 +682,12 @@ def refresh_mbid_for_artists(
             "errors": 0,
         },
         "artist_mbids": {
+            "updated": 0,
+            "unchanged": 0,
+            "errors": 0,
+        },
+        "acoustids": {
+            "extracted": 0,
             "updated": 0,
             "unchanged": 0,
             "errors": 0,
@@ -725,6 +760,7 @@ def refresh_mbid_for_artists(
         existing_track_mbid,
         artist_id,
         existing_artist_mbid,
+        existing_acoustid,
     ) in tracks:
         # Map Plex path to local path
         local_path = map_plex_path_to_local(plex_path, use_test=use_test_paths)
@@ -756,7 +792,7 @@ def refresh_mbid_for_artists(
             # Log the change
             old_display = existing_track_mbid or "NULL"
             logger.info(
-                f"{'[DRY RUN] ' if dry_run else ''}Track id={track_id}: "
+                f"{'[DRY RUN] ' if dry_run else ''}Track id={track_id} MBID: "
                 f"{old_display} → {new_track_mbid}"
             )
 
@@ -770,6 +806,31 @@ def refresh_mbid_for_artists(
                     stats["tracks"]["errors"] += 1
             else:
                 stats["tracks"]["updated"] += 1
+
+        # Extract and update AcousticID
+        new_acoustid = ffmpeg_get_acoustid(track_info)
+        if new_acoustid:
+            stats["acoustids"]["extracted"] += 1
+
+            if new_acoustid == existing_acoustid:
+                stats["acoustids"]["unchanged"] += 1
+            else:
+                old_display = existing_acoustid or "NULL"
+                logger.info(
+                    f"{'[DRY RUN] ' if dry_run else ''}Track id={track_id} AcousticID: "
+                    f"{old_display} → {new_acoustid}"
+                )
+
+                if not dry_run:
+                    try:
+                        update_query = "UPDATE track_data SET acoustid = %s WHERE id = %s"
+                        database.execute_query(update_query, (new_acoustid, track_id))
+                        stats["acoustids"]["updated"] += 1
+                    except Exception as e:
+                        logger.error(f"Error updating track {track_id} acoustid: {e}")
+                        stats["acoustids"]["errors"] += 1
+                else:
+                    stats["acoustids"]["updated"] += 1
 
         # Extract artist MBID (only need one per artist)
         if artist_id not in artist_mbid_updates:
@@ -804,9 +865,10 @@ def refresh_mbid_for_artists(
                 stats["artist_mbids"]["updated"] += 1
 
     logger.info(
-        f"{'[DRY RUN] ' if dry_run else ''}MBID refresh complete: "
-        f"{stats['tracks']['total']} tracks, {stats['tracks']['updated']} track updates, "
-        f"{stats['artist_mbids']['updated']} artist updates"
+        f"{'[DRY RUN] ' if dry_run else ''}Metadata refresh complete: "
+        f"{stats['tracks']['total']} tracks, {stats['tracks']['updated']} MBID updates, "
+        f"{stats['acoustids']['updated']} AcousticID updates, "
+        f"{stats['artist_mbids']['updated']} artist MBID updates"
     )
 
     return stats

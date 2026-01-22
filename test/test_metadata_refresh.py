@@ -7,7 +7,7 @@ after manual tagging with MusicBrainz Picard.
 
 import pytest
 
-from db.db_functions import get_artist_names_found, get_tracks_by_artist_name
+from db.db_functions import add_acoustid_column, get_artist_names_found, get_tracks_by_artist_name
 from pipeline import refresh_metadata_for_artists
 
 
@@ -39,9 +39,9 @@ class TestGetTracksByArtistName:
         result = get_tracks_by_artist_name(db_test, [artist_name])
 
         assert len(result) > 0
-        # Verify result structure: (track_id, filepath, artist_name, track_mbid, artist_id, artist_mbid)
+        # Verify result structure: (track_id, filepath, artist_name, track_mbid, artist_id, artist_mbid, acoustid)
         first_track = result[0]
-        assert len(first_track) == 6
+        assert len(first_track) == 7
         assert isinstance(first_track[0], int)  # track_id
         assert isinstance(first_track[1], str)  # filepath
         assert first_track[2].lower() == artist_name.lower()  # artist_name
@@ -147,6 +147,7 @@ class TestRefreshMetadataForArtists:
         assert "artists_not_found" in stats
         assert "tracks" in stats
         assert "artist_mbids" in stats
+        assert "acoustids" in stats
         assert "dry_run" in stats
 
         # Verify tracks sub-structure
@@ -163,6 +164,12 @@ class TestRefreshMetadataForArtists:
         assert "updated" in stats["artist_mbids"]
         assert "unchanged" in stats["artist_mbids"]
         assert "errors" in stats["artist_mbids"]
+
+        # Verify acoustids sub-structure
+        assert "extracted" in stats["acoustids"]
+        assert "updated" in stats["acoustids"]
+        assert "unchanged" in stats["acoustids"]
+        assert "errors" in stats["acoustids"]
 
     def test_nonexistent_artist_returns_zero_found(self, db_test):
         """Should report 0 found for non-existent artist."""
@@ -282,3 +289,32 @@ class TestRefreshMetadataIntegration:
 
         # If paths are not accessible (mount not available), that's OK
         # Just verify the function completes without error
+
+
+class TestAddAcoustidColumn:
+    """Tests for the acoustid column migration."""
+
+    def test_migration_is_idempotent(self, db_test):
+        """Running migration twice should return False the second time."""
+        # First call might add the column or find it exists
+        add_acoustid_column(db_test)
+
+        # Second call should always return False (column exists)
+        second_result = add_acoustid_column(db_test)
+        assert second_result is False
+
+    def test_acoustid_column_exists_after_migration(self, db_test):
+        """Column should exist after migration."""
+        add_acoustid_column(db_test)
+
+        db_test.connect()
+        result = db_test.execute_select_query("""
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'track_data'
+              AND COLUMN_NAME = 'acoustid'
+        """)
+        db_test.close()
+
+        assert result[0][0] == 1

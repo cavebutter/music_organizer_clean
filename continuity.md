@@ -74,27 +74,50 @@ stats = {
         "unchanged": 0,
         "errors": 0,
     },
+    "acoustids": {
+        "extracted": 38,
+        "updated": 30,
+        "unchanged": 8,
+        "errors": 0,
+    },
     "dry_run": False,
 }
 ```
 
 #### Tests Added
-New test file: `test/test_metadata_refresh.py` with 14 tests:
+New test file: `test/test_metadata_refresh.py` with 16 tests:
 - `TestGetTracksByArtistName` - 5 tests (empty input, existing artist, case-insensitive, nonexistent, multiple)
 - `TestGetArtistNamesFound` - 3 tests
 - `TestRefreshMetadataForArtists` - 5 tests (stats structure, nonexistent artist, dry_run flag, empty list, dry_run doesn't modify)
 - `TestRefreshMetadataIntegration` - 1 integration test
+- `TestAddAcoustidColumn` - 2 tests (idempotent migration, column exists verification)
 
 #### Test Results
-All 14 tests passed in 18.67s
+All 16 tests passed in 21.09s
+
+### AcousticID Extraction
+
+Extended metadata refresh to also extract and store AcousticID from files. Picard embeds AcousticID when it finds a match via acoustic fingerprinting.
+
+**New tag extraction** (`analysis/ffmpeg.py`):
+- `ACOUSTID_TAGS` - Tag name variants for AcousticID
+- `ffmpeg_get_acoustid()` - Extract AcousticID from ffprobe output
+
+**Migration function** (`db/db_functions.py`):
+- `add_acoustid_column()` - Adds `acoustid VARCHAR(255)` column to track_data (idempotent)
+
+**Updated functions**:
+- `get_tracks_by_artist_name()` - Now returns 7-tuple including acoustid
+- `refresh_mbid_for_artists()` - Extracts and stores AcousticID alongside MBID
+- Stats dict now includes `acoustids` section with `extracted`, `updated`, `unchanged`, `errors`
 
 #### Files Modified
 | File | Changes |
 |------|---------|
-| `db/db_functions.py` | Added `get_tracks_by_artist_name()`, `get_artist_names_found()` |
-| `analysis/ffmpeg.py` | Added `refresh_mbid_for_artists()` |
-| `pipeline.py` | Added `refresh_metadata_for_artists()` orchestration, imported new function |
-| `test/test_metadata_refresh.py` | New test file with 14 tests |
+| `db/db_functions.py` | Added `get_tracks_by_artist_name()`, `get_artist_names_found()`, `add_acoustid_column()` |
+| `analysis/ffmpeg.py` | Added `refresh_mbid_for_artists()`, `ffmpeg_get_acoustid()`, `ACOUSTID_TAGS` |
+| `pipeline.py` | Added `refresh_metadata_for_artists()` orchestration |
+| `test/test_metadata_refresh.py` | New test file with 16 tests |
 
 ---
 
@@ -307,9 +330,11 @@ WHERE genres LIKE '%rock%' AND bpm BETWEEN 120 AND 140
 
 | Function | Location | Description |
 |----------|----------|-------------|
-| `refresh_metadata_for_artists()` | `pipeline.py` | Re-extract MBIDs for specific artists (after Picard) |
-| `refresh_mbid_for_artists()` | `analysis/ffmpeg.py` | Low-level MBID refresh with dry-run support |
+| `refresh_metadata_for_artists()` | `pipeline.py` | Re-extract MBIDs/AcousticIDs for specific artists (after Picard) |
+| `refresh_mbid_for_artists()` | `analysis/ffmpeg.py` | Low-level metadata refresh with dry-run support |
 | `get_tracks_by_artist_name()` | `db/db_functions.py` | Query: tracks by artist name (case-insensitive) |
+| `ffmpeg_get_acoustid()` | `analysis/ffmpeg.py` | Extract AcousticID from ffprobe output |
+| `add_acoustid_column()` | `db/db_functions.py` | Migration: add acoustid column to track_data |
 | `enrich_artists_core()` | `db/db_update.py` | MBID + genres only (for stub artists) |
 | `enrich_artists_full()` | `db/db_update.py` | MBID + genres + similar (for primary artists) |
 | `insert_last_fm_artist_data()` | `db/db_update.py` | Legacy wrapper → `enrich_artists_full()` |
@@ -323,10 +348,10 @@ WHERE genres LIKE '%rock%' AND bpm BETWEEN 120 AND 140
 ## Pending Commit
 
 Files modified (Session 7):
-- `db/db_functions.py` - Added `get_tracks_by_artist_name()`, `get_artist_names_found()`
-- `analysis/ffmpeg.py` - Added `refresh_mbid_for_artists()`
+- `db/db_functions.py` - Added `get_tracks_by_artist_name()`, `get_artist_names_found()`, `add_acoustid_column()`
+- `analysis/ffmpeg.py` - Added `refresh_mbid_for_artists()`, `ffmpeg_get_acoustid()`, `ACOUSTID_TAGS`
 - `pipeline.py` - Added `refresh_metadata_for_artists()` orchestration
-- `test/test_metadata_refresh.py` - New test file (14 tests)
+- `test/test_metadata_refresh.py` - New test file (16 tests)
 - `continuity.md` - Updated with Session 7 notes
 
 ## Design Decisions Documented

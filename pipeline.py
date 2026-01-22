@@ -460,7 +460,8 @@ def refresh_metadata_for_artists(
         logger.info(
             f"{'[DRY RUN] ' if dry_run else ''}Metadata refresh complete: "
             f"{stats['artists_found']}/{stats['artists_requested']} artists found, "
-            f"{stats['tracks']['updated']} tracks updated, "
+            f"{stats['tracks']['updated']} track MBIDs updated, "
+            f"{stats['acoustids']['updated']} AcousticIDs updated, "
             f"{stats['artist_mbids']['updated']} artist MBIDs updated"
         )
 
