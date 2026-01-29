@@ -422,10 +422,11 @@ def process_mbid_from_files(
     limit: int | None = None,
 ) -> dict:
     """
-    Extract MusicBrainz IDs from audio files and update database.
+    Extract MusicBrainz IDs and AcousticIDs from audio files and update database.
 
-    Queries tracks that don't have MBIDs, maps their paths to local filesystem,
-    extracts MBIDs using ffprobe, and updates the database.
+    Queries tracks that need metadata extraction (missing MBID or AcousticID),
+    maps their paths to local filesystem, extracts IDs using ffprobe, and
+    updates the database.
 
     Args:
         database: Database connection
@@ -438,50 +439,57 @@ def process_mbid_from_files(
             'total': int - tracks queried
             'accessible': int - files that could be accessed
             'inaccessible': int - files that couldn't be accessed
-            'extracted': int - MBIDs found in files
-            'missing': int - files without MBID tags
-            'updated': int - database rows updated
-            'errors': int - database update errors
+            'mbid': dict - MBID extraction stats (extracted, updated, errors)
+            'acoustid': dict - AcousticID extraction stats (extracted, updated, errors)
             'skipped': bool - True if skipped due to config/environment issues
     """
     stats = {
         "total": 0,
         "accessible": 0,
         "inaccessible": 0,
-        "extracted": 0,
-        "missing": 0,
-        "updated": 0,
-        "errors": 0,
+        "mbid": {
+            "extracted": 0,
+            "updated": 0,
+            "errors": 0,
+        },
+        "acoustid": {
+            "extracted": 0,
+            "updated": 0,
+            "errors": 0,
+        },
         "skipped": False,
     }
 
     # Validate environment first
     if not check_ffprobe_available():
-        logger.warning("ffprobe not available - skipping MBID extraction from files")
+        logger.warning("ffprobe not available - skipping metadata extraction from files")
         stats["skipped"] = True
         return stats
 
     path_validation = validate_path_mapping(use_test=use_test_paths)
     if not path_validation["configured"]:
-        logger.warning("Path mapping not configured - skipping MBID extraction from files")
+        logger.warning("Path mapping not configured - skipping metadata extraction from files")
         stats["skipped"] = True
         return stats
 
     if not path_validation["accessible"]:
         logger.warning(
             f"Music path not accessible: {path_validation['local_prefix']} - "
-            "skipping MBID extraction from files"
+            "skipping metadata extraction from files"
         )
         stats["skipped"] = True
         return stats
 
-    # Query tracks without MBIDs
+    # Query tracks that need MBID or AcousticID extraction
     database.connect()
     query = """
-        SELECT id, filepath
+        SELECT id, filepath, musicbrainz_id, acoustid
         FROM track_data
-        WHERE (musicbrainz_id IS NULL OR musicbrainz_id = '')
-        AND filepath IS NOT NULL AND filepath != ''
+        WHERE filepath IS NOT NULL AND filepath != ''
+          AND (
+            (musicbrainz_id IS NULL OR musicbrainz_id = '')
+            OR (acoustid IS NULL OR acoustid = '')
+          )
     """
     if limit:
         query += f" LIMIT {limit}"
@@ -490,14 +498,14 @@ def process_mbid_from_files(
     database.close()
 
     if not tracks:
-        logger.info("No tracks without MBIDs found")
+        logger.info("No tracks need metadata extraction")
         return stats
 
     stats["total"] = len(tracks)
-    logger.info(f"Processing {stats['total']} tracks for MBID extraction")
+    logger.info(f"Processing {stats['total']} tracks for MBID/AcousticID extraction")
 
     # Process each track
-    for i, (track_id, plex_path) in enumerate(tracks):
+    for i, (track_id, plex_path, existing_mbid, existing_acoustid) in enumerate(tracks):
         # Map Plex path to local path
         local_path = map_plex_path_to_local(plex_path, use_test=use_test_paths)
 
@@ -507,39 +515,54 @@ def process_mbid_from_files(
 
         stats["accessible"] += 1
 
-        # Extract MBID from file
+        # Extract metadata from file
         track_info = ffmpeg_get_info(local_path)
         if not track_info:
-            stats["missing"] += 1
             continue
 
-        mbid = ffmpeg_get_mbtid(track_info)
-        if not mbid:
-            stats["missing"] += 1
-            continue
+        # Extract and update MBID if needed
+        needs_mbid = not existing_mbid or existing_mbid == ''
+        if needs_mbid:
+            mbid = ffmpeg_get_mbtid(track_info)
+            if mbid:
+                stats["mbid"]["extracted"] += 1
+                try:
+                    database.execute_query(
+                        "UPDATE track_data SET musicbrainz_id = %s WHERE id = %s",
+                        (mbid, track_id)
+                    )
+                    stats["mbid"]["updated"] += 1
+                except Exception as e:
+                    logger.error(f"Error updating track {track_id} with MBID {mbid}: {e}")
+                    stats["mbid"]["errors"] += 1
 
-        stats["extracted"] += 1
-
-        # Update database
-        try:
-            update_query = "UPDATE track_data SET musicbrainz_id = %s WHERE id = %s"
-            database.execute_query(update_query, (mbid, track_id))
-            stats["updated"] += 1
-        except Exception as e:
-            logger.error(f"Error updating track {track_id} with MBID {mbid}: {e}")
-            stats["errors"] += 1
+        # Extract and update AcousticID if needed
+        needs_acoustid = not existing_acoustid or existing_acoustid == ''
+        if needs_acoustid:
+            acoustid = ffmpeg_get_acoustid(track_info)
+            if acoustid:
+                stats["acoustid"]["extracted"] += 1
+                try:
+                    database.execute_query(
+                        "UPDATE track_data SET acoustid = %s WHERE id = %s",
+                        (acoustid, track_id)
+                    )
+                    stats["acoustid"]["updated"] += 1
+                except Exception as e:
+                    logger.error(f"Error updating track {track_id} with AcousticID: {e}")
+                    stats["acoustid"]["errors"] += 1
 
         # Progress logging
         if (i + 1) % batch_size == 0:
             logger.info(
                 f"Progress: {i + 1}/{stats['total']} tracks processed, "
-                f"{stats['extracted']} MBIDs extracted, {stats['updated']} updated"
+                f"{stats['mbid']['extracted']} MBIDs, {stats['acoustid']['extracted']} AcousticIDs"
             )
 
     logger.info(
-        f"MBID extraction complete: {stats['total']} tracks, "
-        f"{stats['accessible']} accessible, {stats['extracted']} MBIDs found, "
-        f"{stats['updated']} updated"
+        f"Metadata extraction complete: {stats['total']} tracks, "
+        f"{stats['accessible']} accessible, {stats['mbid']['updated']} MBIDs updated, "
+        f"{stats['acoustid']['updated']} AcousticIDs updated"
     )
 
     return stats

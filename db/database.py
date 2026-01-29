@@ -226,14 +226,19 @@ class Database:
         , artist_id INTEGER
         , plex_id INTEGER
         , musicbrainz_id VARCHAR(255)
+        , acoustid VARCHAR(255)
         , FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE)"""
         self.create_table(track_data_ddl)
         ix_loc = """CREATE INDEX ix_loc ON track_data (location)"""
-        ix_filepath = """CREATE INDEX ix_fileath on track_data (filepath)"""
-        ix_bpm = """CREATE INDEX ix_bpm on track_data (bpm)"""
+        ix_filepath = """CREATE INDEX ix_filepath ON track_data (filepath)"""
+        ix_bpm = """CREATE INDEX ix_bpm ON track_data (bpm)"""
+        ix_mbid = """CREATE INDEX ix_musicbrainz_id ON track_data (musicbrainz_id)"""
+        ix_plex = """CREATE INDEX ix_plex_id ON track_data (plex_id)"""
         self.execute_query(ix_loc)
         self.execute_query(ix_filepath)
         self.execute_query(ix_bpm)
+        self.execute_query(ix_mbid)
+        self.execute_query(ix_plex)
         self.execute_query("SET FOREIGN_KEY_CHECKS = 1")
 
     @register_create_table_method
