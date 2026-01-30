@@ -375,7 +375,17 @@ def enrich_artists_core(
                 if i > 0:
                     sleep(rate_limit_delay)
 
+                # Keep connection alive during long-running loops
+                database.ensure_connection()
+
                 artist_info = lastfm.get_artist_info(artist_name)
+
+                # Mark enrichment attempted regardless of success
+                database.execute_query(
+                    "UPDATE artists SET enrichment_attempted_at = NOW() WHERE id = %s",
+                    (artist_id,),
+                )
+
                 if not artist_info:
                     logger.warning(f"Failed to retrieve artist info for {artist_name}")
                     stats["failed"] += 1
@@ -465,7 +475,17 @@ def enrich_artists_full(
                 if i > 0:
                     sleep(rate_limit_delay)
 
+                # Keep connection alive during long-running loops
+                database.ensure_connection()
+
                 artist_info = lastfm.get_artist_info(artist_name)
+
+                # Mark enrichment attempted regardless of success
+                database.execute_query(
+                    "UPDATE artists SET enrichment_attempted_at = NOW() WHERE id = %s",
+                    (artist_id,),
+                )
+
                 if not artist_info:
                     logger.warning(f"Failed to retrieve artist info for {artist_name}")
                     stats["failed"] += 1
@@ -697,6 +717,9 @@ def process_lastfm_track_data(
         # Rate limiting
         if i > 0:  # Skip delay on first request
             sleep(rate_limit_delay)
+
+        # Keep connection alive during long-running loops
+        database.ensure_connection()
 
         stats["processed"] += 1
 

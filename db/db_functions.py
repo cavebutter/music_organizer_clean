@@ -144,6 +144,49 @@ def populate_artist_id_column(database: Database):
     logger.debug("Updated artist_id column in track_data table")
 
 
+def add_enrichment_attempted_column(database: Database) -> bool:
+    """Add enrichment_attempted_at column to artists table.
+
+    This column tracks when an artist was last processed for enrichment,
+    preventing re-processing of artists that Last.fm doesn't recognize
+    (e.g., "feat." artists that return no similar artists).
+
+    Args:
+        database: Database connection
+
+    Returns:
+        True if column was added, False if it already exists or error occurred
+    """
+    database.connect()
+
+    # Check if column already exists
+    check_query = """
+        SELECT COUNT(*)
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'artists'
+          AND COLUMN_NAME = 'enrichment_attempted_at'
+    """
+    result = database.execute_select_query(check_query)
+
+    if result and result[0][0] > 0:
+        logger.info("enrichment_attempted_at column already exists in artists")
+        database.close()
+        return False
+
+    # Add the column
+    try:
+        alter_query = "ALTER TABLE artists ADD COLUMN enrichment_attempted_at TIMESTAMP NULL DEFAULT NULL"
+        database.execute_query(alter_query)
+        logger.info("Added enrichment_attempted_at column to artists table")
+        database.close()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to add enrichment_attempted_at column: {e}")
+        database.close()
+        return False
+
+
 def add_acoustid_column(database: Database) -> bool:
     """Add acoustid column to track_data table.
 
@@ -224,10 +267,13 @@ def update_history(database: Database, import_size: int):
 
 
 def get_primary_artists_without_similar(database: Database) -> list[tuple[int, str]]:
-    """Find artists with tracks but no outgoing similar_artists records.
+    """Find artists with tracks that haven't been enriched yet.
 
     These are "primary" artists (have tracks in the library) that need full
     Last.fm enrichment including similar artist discovery.
+
+    Uses enrichment_attempted_at column to avoid re-processing artists that
+    Last.fm doesn't recognize (e.g., "feat." artists).
 
     Args:
         database: Database connection object
@@ -240,8 +286,7 @@ def get_primary_artists_without_similar(database: Database) -> list[tuple[int, s
         SELECT DISTINCT a.id, a.artist
         FROM artists a
         INNER JOIN track_data td ON a.id = td.artist_id
-        LEFT JOIN similar_artists sa ON a.id = sa.artist_id
-        WHERE sa.artist_id IS NULL
+        WHERE a.enrichment_attempted_at IS NULL
     """
     results = database.execute_select_query(query)
     database.close()
@@ -249,11 +294,14 @@ def get_primary_artists_without_similar(database: Database) -> list[tuple[int, s
 
 
 def get_stub_artists_without_mbid(database: Database) -> list[tuple[int, str]]:
-    """Find artists without tracks and without MBID (stub artists needing core enrichment).
+    """Find stub artists that haven't been enriched yet.
 
     These are "stub" artists added via similar_artists relationships that need
     MBID and genre enrichment, but should NOT have their similar artists fetched
     (to prevent infinite graph expansion).
+
+    Uses enrichment_attempted_at column to avoid re-processing artists that
+    Last.fm doesn't recognize.
 
     Args:
         database: Database connection object
@@ -267,7 +315,7 @@ def get_stub_artists_without_mbid(database: Database) -> list[tuple[int, str]]:
         FROM artists a
         LEFT JOIN track_data td ON a.id = td.artist_id
         WHERE td.id IS NULL
-          AND a.musicbrainz_id IS NULL
+          AND a.enrichment_attempted_at IS NULL
     """
     results = database.execute_select_query(query)
     database.close()

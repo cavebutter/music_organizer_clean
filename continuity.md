@@ -1,4 +1,110 @@
-# Session Continuity - 2026-01-21
+# Session Continuity - 2026-01-29
+
+## Planned Features
+
+### SQLite Migration (Next Major Feature)
+
+Migrate from MySQL to SQLite to improve portability and eliminate connection issues.
+
+**Motivation:**
+- Remote MySQL connections drop during long-running API calls (stale connection errors)
+- Lower barrier to entry for other users (no MySQL setup required)
+- Single-file database = easy backup/portability
+- Data volume (~37k tracks) well within SQLite capacity
+
+**Migration Plan:**
+1. Abstract database layer (mostly done via `Database` class)
+2. Replace MySQL-specific syntax:
+   - Placeholders: `%s` → `?`
+   - Auto-increment: `AUTO_INCREMENT` → `AUTOINCREMENT`
+   - Any MySQL-specific functions
+3. Add auto-reconnect logic to `Database` class (interim fix for MySQL)
+4. Write migration script: export MySQL → transform → import SQLite
+5. Update `.env` config to support both backends (for transition period)
+
+**Files to Modify:**
+- `db/database.py` - Add SQLite support, connection abstraction
+- `db/__init__.py` - Config for database backend selection
+- `db/db_functions.py` - Verify SQL compatibility
+- `db/db_update.py` - Verify SQL compatibility
+- New: `scripts/migrate_to_sqlite.py`
+
+### Enrichment Tracking & Connection Keep-Alive (Next Up)
+
+Two fixes to implement after current pipeline run completes:
+
+**1. `enrichment_attempted_at` Column**
+
+Prevents re-processing artists that Last.fm doesn't recognize (e.g., "feat." artists).
+
+- Add `enrichment_attempted_at TIMESTAMP NULL` to `artists` table
+- Migration function: `add_enrichment_attempted_column()` (idempotent)
+- Update `get_primary_artists_without_similar()` → check `enrichment_attempted_at IS NULL`
+- Update `get_stub_artists_without_mbid()` → same
+- Update `enrich_artists_full()` and `enrich_artists_core()` → set timestamp after each artist
+
+**2. MySQL Keep-Alive / Auto-Reconnect**
+
+Handles connection drops from hibernation or long API calls.
+
+- Add `ensure_connection()` → ping with reconnect
+- Add `execute_with_reconnect()` → wrapper that catches OperationalError and retries
+- Call `ensure_connection()` in enrichment loops before each artist/track
+
+**Files to Modify:**
+- `db/database.py` - Add keep-alive methods
+- `db/db_functions.py` - Add migration, update detection queries
+- `db/db_update.py` - Set timestamp after enrichment, use keep-alive in loops
+
+---
+
+### AI-Powered Genre Grouping
+
+Use AI to semantically group entries in the `genres` table by "feel" or mood, enabling broader net for smart playlist generation.
+
+**Motivation:**
+- Current genre matching is exact-string based (e.g., "post-punk" won't match "punk")
+- Many genres are related by feel but have different names (e.g., "chillwave", "dream pop", "shoegaze")
+- Smart playlists could benefit from "give me songs that feel like X" rather than exact genre matching
+
+**Potential Approach:**
+1. Export all unique genres from database
+2. Send to AI with prompt to cluster by musical feel/mood/energy
+3. Store groupings in new table (e.g., `genre_groups` with `group_name`, `genre_id`)
+4. Update playlist queries to optionally expand genre matches to include related genres
+
+**Example Groups:**
+- "High Energy Rock": punk, post-punk, garage rock, hard rock
+- "Atmospheric/Dreamy": shoegaze, dream pop, chillwave, ambient
+- "Melancholic": slowcore, sadcore, darkwave, gothic rock
+
+---
+
+## What Was Accomplished (Session 8)
+
+### AcousticID Integration
+
+Extended metadata extraction to capture AcousticID alongside MBID for future BPM lookup enhancement.
+
+**Changes:**
+- `process_mbid_from_files()` now extracts both MBID and AcousticID from files
+- New `analysis/acoustid.py` module for AcoustID API integration (requires API key)
+- `process_bpm_acousticbrainz()` has two phases: MBID direct lookup, then AcousticID fallback
+- Added `ACOUSTID_API_KEY` to `.env.example`
+
+**Note:** AcoustID API registration was blocked, so AcousticID→MBID resolution is not currently functional. AcousticIDs are still extracted and stored for future use.
+
+### Resume Production Script
+
+Created `scripts/resume_production.py` to resume pipeline from database state without dropping tables.
+
+**Features:**
+- Checks current enrichment status
+- Skips completed phases
+- Uses existing query functions to find incomplete records
+- Handles all phases: artist enrichment, stub enrichment, track enrichment, BPM lookup
+
+---
 
 ## What Was Accomplished (Session 7)
 

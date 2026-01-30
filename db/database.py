@@ -74,6 +74,23 @@ class Database:
                 logger.error(f"There was an error connecting to MySQL server: {error}")
                 sys.exit()
 
+    def ensure_connection(self) -> None:
+        """Ensure connection is alive, reconnect if stale.
+
+        Call this before database operations in long-running loops where the
+        connection may have timed out (e.g., during API calls or hibernation).
+        """
+        if self.connection is None:
+            self.connect()
+            return
+
+        try:
+            self.connection.ping(reconnect=True, attempts=3, delay=1)
+        except mysql.connector.Error as e:
+            logger.warning(f"Connection ping failed: {e}, reconnecting...")
+            self.connection = None
+            self.connect()
+
     def close(self):
         """
         Closes the connection to the MySQL server.
